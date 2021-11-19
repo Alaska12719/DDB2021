@@ -118,4 +118,8 @@ public class EtcdClient {
                                           .get();
         return deleteResponse.getDeleted();
     }
+
+    public void close() {
+        client.close();
+    }
 }

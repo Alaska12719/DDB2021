@@ -22,7 +22,7 @@ public class SqlClient {
     private DdbServiceBlockingStub stub;
     
     public SqlClient(String ip) {
-        String target = ip + ":" + Constants.PORT;
+        String target = ip + ":" + Constants.SERVER_PORT;
         ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
                                                       .usePlaintext()
                                                       .build();
@@ -47,9 +47,10 @@ public class SqlClient {
                                                 .build();
         TableResponse tableResponse = stub.requestTable(tableRequest);
         List<String> results = new ArrayList<>();
-        // for (int i = 0; i < tableResponse.getAttributeValuesCount(); i++) {
-        //     results.add(tableResponse.getAttributeValues(i));
-        // }
+        results.add(tableResponse.getAttributeMeta());
+        for (int i = 0; i < tableResponse.getAttributeValuesCount(); i++) {
+            results.add(tableResponse.getAttributeValues(i));
+        }
         return results;
     }
 
@@ -72,6 +73,11 @@ public class SqlClient {
                                                                        .build();
         ExecuteNonQueryResponse nonQueryResponse = stub.executeNonQuery(nonQueryRequest);
         return nonQueryResponse.getSuccess();
+    }
+
+    public void close() {
+        ManagedChannel channel = (ManagedChannel) stub.getChannel();
+        channel.shutdown();
     }
 
 }
