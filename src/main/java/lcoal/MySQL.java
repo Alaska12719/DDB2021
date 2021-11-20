@@ -10,6 +10,7 @@ import java.util.List;
 
 import network.proto.ExecuteNonQueryResponse;
 import network.proto.ExecuteQueryResponse;
+import network.proto.TableResponse;
 
 public class MySQL {
     private static final String DATABASE_NAME = "ddb";
@@ -46,7 +47,62 @@ public class MySQL {
             while (resultSet.next()) {
                 StringBuffer rowBuffer = new StringBuffer();
                 for (String columnName : columnNames) {
-                    rowBuffer.append(resultSet.getString(columnName))
+                    rowBuffer.append(String.format("'%s'", resultSet.getString(columnName)))
+                             .append(',');
+                }
+                rowBuffer.deleteCharAt(rowBuffer.length() - 1);
+                builder.addAttributeValues(rowBuffer.toString());
+            }
+            resultSet.close();
+            statement.close();
+            connection.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (statement != null) {
+                    statement.close();
+                }
+            } catch (Exception ignoreException){}
+            try {
+                if (statement != null) {
+                    connection.close();
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    public static void executeQuery(String query, TableResponse.Builder builder) {
+        Connection connection = null;
+        Statement statement = null;
+        try {
+            Class.forName(JDBC_DRIVER);
+            connection = DriverManager.getConnection(DATABASE_URL, USERNAME, PASSWORD);
+            statement = connection.createStatement();
+            statement.execute(String.format("create database if not exists `%s`", DATABASE_NAME));
+            statement.execute(String.format("use `%s`", DATABASE_NAME));
+            ResultSet resultSet = statement.executeQuery(query);
+            ResultSetMetaData metaData = resultSet.getMetaData();
+            List<String> columnNames = new ArrayList<>();
+            List<String> columnTypes = new ArrayList<>();
+            StringBuffer metaBuffer = new StringBuffer();
+            for (int i = 0; i < metaData.getColumnCount(); i++) {
+                if (i != 0) {
+                    metaBuffer.append(',');
+                }
+                metaBuffer.append(metaData.getColumnName(i + 1))
+                          .append(' ')
+                          .append(metaData.getColumnTypeName(i + 1));
+                columnNames.add(metaData.getColumnName(i + 1));
+                columnTypes.add(metaData.getColumnTypeName(i + 1));
+            }
+            builder.setAttributeMeta(metaBuffer.toString());
+            while (resultSet.next()) {
+                StringBuffer rowBuffer = new StringBuffer();
+                for (String columnName : columnNames) {
+                    rowBuffer.append(String.format("'%s'", resultSet.getString(columnName)))
                              .append(',');
                 }
                 rowBuffer.deleteCharAt(rowBuffer.length() - 1);

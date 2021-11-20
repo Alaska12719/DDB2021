@@ -3,6 +3,7 @@ package network;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -208,15 +209,25 @@ class DdbServiceImpl extends DdbServiceImplBase {
                 if (queryResult.size() == 0) {
                     return;
                 }
-                String sql = String.format("drop table if exists `%s`;", tempTableName);
-                MySQL.executeNonQuery(sql, null);
-                sql = String.format("create table `%s` (%s) ENGINE=InnoDB DEFAULT CHARSET=utf8",
-                                    tempTableName, queryResult.get(0));
-                MySQL.executeNonQuery(sql, null);
-                insert(tempTableName, queryResult);
-                for (int i = 1; i < n; i++) {
-                    queryResult = waitForData(responses.get(i));
-                    insert(tempTableName, queryResult);
+                final CountDownLatch countDownLatch = new CountDownLatch(n);
+                for (int i = 0; i < n; i++) {
+                    final int p = i;
+                    new Thread(new Runnable(){
+                        @Override
+                        public void run() {
+                            List<String> queryResult = waitForData(responses.get(p));
+                            String sql = String.format("create table if not exists `%s` (%s) ENGINE=InnoDB DEFAULT CHARSET=utf8",
+                                                       tempTableName, queryResult.get(0));
+                            MySQL.executeNonQuery(sql, null);
+                            insert(tempTableName, queryResult);
+                            countDownLatch.countDown();
+                        }
+                    }).start();
+                }
+                try {
+                    countDownLatch.await();
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
 
                 // 把数据返回给父节点
@@ -225,7 +236,7 @@ class DdbServiceImpl extends DdbServiceImplBase {
                 responseObserver.onNext(tableResponse);
 
                 // 删除暂存的临时表
-                sql = String.format("drop table if exists `%s`;", tempTableName);
+                String sql = String.format("drop table if exists `%s`;", tempTableName);
                 MySQL.executeNonQuery(sql, null);
                 responseObserver.onCompleted();
             } else {
@@ -239,17 +250,30 @@ class DdbServiceImpl extends DdbServiceImplBase {
                 for (int i = 0; i < n; i++) {
                     responses.add(getDataFromChild(ips.get(i), children.get(i)));
                 }
-                for (int i = 0; i < n; i++) {
-                    List<String> queryResult = waitForData(responses.get(i));
-                    if (queryResult.size() == 0) {
-                        return;
-                    }
-                    String sql = String.format("drop table if exists `%s`;", children.get(i));
-                    MySQL.executeNonQuery(sql, null);
-                    sql = String.format("create table `%s` (%s) ENGINE=InnoDB DEFAULT CHARSET=utf8",
-                                        children.get(i), queryResult.get(0));
-                    MySQL.executeNonQuery(sql, null);
-                    insert(children.get(i), queryResult);
+                final CountDownLatch countDownLatch = new CountDownLatch(n);
+                for (int i = 0; i < n; i++) {   
+                    final int p = i;
+                    new Thread(new Runnable(){
+                        @Override
+                        public void run() {
+                            List<String> queryResult = waitForData(responses.get(p));
+                            if (queryResult.size() == 0) {
+                                return;
+                            }
+                            String sql = String.format("drop table if exists `%s`;", children.get(p));
+                            MySQL.executeNonQuery(sql, null);
+                            sql = String.format("create table `%s` (%s) ENGINE=InnoDB DEFAULT CHARSET=utf8",
+                                                children.get(p), queryResult.get(0));
+                            MySQL.executeNonQuery(sql, null);
+                            insert(children.get(p), queryResult);
+                            countDownLatch.countDown();
+                        }
+                    }).start();
+                }
+                try {
+                    countDownLatch.await();
+                } catch (Exception e) {
+                    e.printStackTrace();
                 }
 
                 // 把数据返回给父节点
