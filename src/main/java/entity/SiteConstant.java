@@ -16,6 +16,9 @@ public class SiteConstant {
     public String getSiteIp() {
         return siteName + ".ip";
     }
+    public String getFragments() {
+        return siteName + ".fragments";
+    }
 
 }
 

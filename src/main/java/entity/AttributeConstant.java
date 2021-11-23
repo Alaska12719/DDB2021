@@ -2,20 +2,59 @@ package entity;
 public class AttributeConstant {
     private String relationName;
     private String attributeName;
-    public AttributeConstant(String relationName) {
-        this.attributeName = "attribute." + relationName;
+    public AttributeConstant(String relationName, String attributeName) {
+        this.relationName = "relation." + relationName;
+        this.attributeName = this.relationName + ".attribute." + attributeName;
     }
 
     public String getRelationName() {
-        return relationName;
+        return relationName.split(".")[1];
     }
 
     public String getAttributeType() {
-        return this.attributeName + "type";
+        return this.attributeName + ".type";
     }
     public String getAttributeNum() {
         return relationName + ".attributeNum";
     }
 
+    public String getIsExitSite(String site) {
+        return this.attributeName + ".site." + site + ".isExist";
+    }
+
+    public String getIsHorizon() {
+        return this.attributeName + ".isHorizon";
+    }
+    public String getIsVertical() {
+        return this.attributeName + ".isVertical";
+    }
+
+    public String getFragmentInfo(String site) {
+        return this.attributeName + ".site." + site + ".fragment";
+    }
+
+    /*
+重写hashCode()方法，定义内容相同的哈希码相同，内容不同的哈希码不同
+*/
+    @Override
+    public int hashCode() {
+        return this.relationName.hashCode() +this.attributeName.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this==obj)
+            return true;
+        if (obj==null)
+            return false;
+        if (this.getClass()!=obj.getClass())
+            return false;
+        AttributeConstant attr = (AttributeConstant)obj;
+
+        if (this.relationName.equals(attr.relationName) && this.attributeName.equals(attr.attributeName)) {
+            return true;
+        }
+        return false;
+    }
 
 }
