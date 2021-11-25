@@ -7,31 +7,40 @@ import io.etcd.jetcd.ByteSequence;
 import io.etcd.jetcd.Client;
 import io.etcd.jetcd.KV;
 import io.etcd.jetcd.KeyValue;
+import io.etcd.jetcd.Lease;
+import io.etcd.jetcd.Lock;
 import io.etcd.jetcd.Txn;
 import io.etcd.jetcd.kv.DeleteResponse;
 import io.etcd.jetcd.kv.GetResponse;
 import io.etcd.jetcd.kv.TxnResponse;
+import io.etcd.jetcd.lease.LeaseGrantResponse;
+import io.etcd.jetcd.lease.LeaseKeepAliveResponse;
 import io.etcd.jetcd.op.Op;
 import io.etcd.jetcd.op.Op.GetOp;
 import io.etcd.jetcd.op.Op.PutOp;
 import io.etcd.jetcd.options.DeleteOption;
 import io.etcd.jetcd.options.GetOption;
 import io.etcd.jetcd.options.PutOption;
+import io.grpc.stub.StreamObserver;
 
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public class EtcdClient {
+    private long leaseId;
     private final Client client;
 
-    private static ByteSequence bytesOf(String s) {
+    public static ByteSequence bytesOf(String s) {
         return ByteSequence.from(s, UTF_8);
     }
 
     public EtcdClient(String endPoints) {
+        String[] l = endPoints.split(",");
         client = Client.builder().endpoints(endPoints.split(",")).build();
     }
 
@@ -80,8 +89,8 @@ public class EtcdClient {
                 for (int i = 0; i < getResponses.size(); i++) {
                     GetResponse getResponse = getResponses.get(i);
                     if (getResponse.getKvs().size() > 0) {
-                        keyValues.put(getResponse.getKvs().get(0).getKey().toString(UTF_8), 
-                                      getResponse.getKvs().get(0).getValue().toString(UTF_8));
+                        keyValues.put(getResponse.getKvs().get(0).getKey().toString(UTF_8),
+                                getResponse.getKvs().get(0).getValue().toString(UTF_8));
                     }
                 }
                 return keyValues;
@@ -92,9 +101,7 @@ public class EtcdClient {
 
     public Map<String, String> getByPrefix(String prefix) throws ExecutionException, InterruptedException {
         KV kv = client.getKVClient();
-        GetResponse getResponse = kv.get(bytesOf(prefix), 
-                                         GetOption.newBuilder().isPrefix(true).build())
-                                    .get();
+        GetResponse getResponse = kv.get(bytesOf(prefix), GetOption.newBuilder().isPrefix(true).build()).get();
         if (getResponse.getCount() > 0) {
             Map<String, String> keyValues = new HashMap<>();
             for (KeyValue keyValue : getResponse.getKvs()) {
@@ -113,13 +120,41 @@ public class EtcdClient {
 
     public long removeByPrefix(String prefix) throws ExecutionException, InterruptedException {
         KV kv = client.getKVClient();
-        DeleteResponse deleteResponse = kv.delete(bytesOf(prefix), 
-                                                  DeleteOption.newBuilder().isPrefix(true).build())
-                                          .get();
+        DeleteResponse deleteResponse = kv.delete(bytesOf(prefix), DeleteOption.newBuilder().isPrefix(true).build())
+                .get();
         return deleteResponse.getDeleted();
     }
 
     public void close() {
         client.close();
+    }
+
+    public void lock() throws InterruptedException, ExecutionException, TimeoutException {
+        Lease lease = client.getLeaseClient();
+        Lock lock = client.getLockClient();
+        LeaseGrantResponse LeaseGrantResponse = lease.grant(1).get(1, TimeUnit.SECONDS);
+        // System.out.println("x");
+        leaseId = LeaseGrantResponse.getID();
+        StreamObserver<LeaseKeepAliveResponse> observer = new StreamObserver<LeaseKeepAliveResponse>() {
+
+            @Override
+            public void onCompleted() {}
+
+            @Override
+            public void onError(Throwable t) {}
+
+            @Override
+            public void onNext(LeaseKeepAliveResponse value) {}
+            
+        };
+        lease.keepAlive(leaseId, observer);
+        lock.lock(Constants.LOCK_NAME, leaseId).get();
+    }
+
+    public void unlock() { 
+        Lease lease = client.getLeaseClient();
+        Lock lock = client.getLockClient();
+        lock.unlock(Constants.LOCK_NAME);
+        lease.revoke(leaseId);
     }
 }
