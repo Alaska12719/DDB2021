@@ -10,6 +10,9 @@ public class AttributeConstant {
     public String getRelationName() {
         return relationName.split(".")[1];
     }
+    public String getAttributeName() {
+        return attributeName.split(".")[3];
+    }
 
     public String getAttributeType() {
         return this.attributeName + ".type";
@@ -33,6 +36,9 @@ public class AttributeConstant {
         return this.attributeName + ".site." + site + ".fragment";
     }
 
+    public String relationKey() {
+        return this.relationName +".key";
+    }
     /*
 重写hashCode()方法，定义内容相同的哈希码相同，内容不同的哈希码不同
 */
