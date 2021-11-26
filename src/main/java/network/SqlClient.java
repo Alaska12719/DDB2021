@@ -21,9 +21,8 @@ public class SqlClient {
 
     private DdbServiceBlockingStub stub;
     
-    public SqlClient(String ip) {
-        String target = ip + ":" + Constants.SERVER_PORT;
-        ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
+    public SqlClient(String address) {
+        ManagedChannel channel = ManagedChannelBuilder.forTarget(address)
                                                       .usePlaintext()
                                                       .build();
         stub = DdbServiceGrpc.newBlockingStub(channel);

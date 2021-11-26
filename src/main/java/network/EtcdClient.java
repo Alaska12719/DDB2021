@@ -28,10 +28,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
-public class EtcdClient {
+public class EtcdClient implements AutoCloseable {
     private long leaseId;
     private final Client client;
 
@@ -40,7 +38,6 @@ public class EtcdClient {
     }
 
     public EtcdClient(String endPoints) {
-        String[] l = endPoints.split(",");
         client = Client.builder().endpoints(endPoints.split(",")).build();
     }
 
@@ -90,7 +87,7 @@ public class EtcdClient {
                     GetResponse getResponse = getResponses.get(i);
                     if (getResponse.getKvs().size() > 0) {
                         keyValues.put(getResponse.getKvs().get(0).getKey().toString(UTF_8),
-                                getResponse.getKvs().get(0).getValue().toString(UTF_8));
+                                      getResponse.getKvs().get(0).getValue().toString(UTF_8));
                     }
                 }
                 return keyValues;
@@ -125,15 +122,16 @@ public class EtcdClient {
         return deleteResponse.getDeleted();
     }
 
+    @Override
     public void close() {
         client.close();
     }
 
-    public void lock() throws InterruptedException, ExecutionException, TimeoutException {
+    public void lock() throws InterruptedException, ExecutionException {
+        KV kv = client.getKVClient();
         Lease lease = client.getLeaseClient();
         Lock lock = client.getLockClient();
-        LeaseGrantResponse LeaseGrantResponse = lease.grant(1).get(1, TimeUnit.SECONDS);
-        // System.out.println("x");
+        LeaseGrantResponse LeaseGrantResponse = lease.grant(Constants.TTL).get();
         leaseId = LeaseGrantResponse.getID();
         StreamObserver<LeaseKeepAliveResponse> observer = new StreamObserver<LeaseKeepAliveResponse>() {
 
@@ -148,13 +146,15 @@ public class EtcdClient {
             
         };
         lease.keepAlive(leaseId, observer);
-        lock.lock(Constants.LOCK_NAME, leaseId).get();
+        kv.put(Constants.LOCK_KEY, Constants.LOCK_VALUE, PutOption.newBuilder().withLeaseId(leaseId)
+                                                                               .build());
+        lock.lock(Constants.LOCK_KEY, leaseId).get();
     }
 
-    public void unlock() { 
+    public void unlock() throws InterruptedException, ExecutionException {
         Lease lease = client.getLeaseClient();
         Lock lock = client.getLockClient();
-        lock.unlock(Constants.LOCK_NAME);
-        lease.revoke(leaseId);
+        lock.unlock(Constants.LOCK_KEY).get();
+        lease.revoke(leaseId).get();
     }
 }

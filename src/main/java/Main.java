@@ -1,9 +1,10 @@
-import java.util.List;
 import java.util.ArrayList;
-import java.util.Scanner;
 
+import network.Constants;
+import network.EtcdClient;
 import network.SqlClient;
 import network.SqlServer;
+import network.TempTable;
 
 public class Main {
     public static void main(String[] args) {
@@ -14,80 +15,82 @@ public class Main {
             e.printStackTrace();
         }
 
-        // SqlClient client67 = new SqlClient("10.77.70.67"); //10.77.70.68 127.0.0.1
-        // List<String> t67 = new ArrayList<>();
-        // t67.add("1, 'abc'");
-        // t67.add("2, 'def'");
-        // client67.saveTable("t", "id int, name varchar(6)", t67);
-        // System.out.println("10.77.70.67");
-        // System.out.println(client67.executeQuery("select * from t"));
-        // client67.executeNonQuery("delete from t");
-        // client67.executeNonQuery("drop table t");
-        // System.out.println();
+               
+        TempTable t111 = new TempTable();
+        t111.project = "*";
+        t111.isLeaf = true;
+        t111.tableName = "t1";
 
-        // SqlClient client68 = new SqlClient("10.77.70.68"); //10.77.70.68 127.0.0.1
-        // List<String> t68 = new ArrayList<>();
-        // t68.add("3, 'abc'");
-        // t68.add("4, 'def'");
-        // client68.saveTable("t", "id int, name varchar(6)", t68);
-        // System.out.println("10.77.70.68");
-        // System.out.println(client68.executeQuery("select * from t"));
-        // client68.executeNonQuery("delete from t");
-        // client68.executeNonQuery("drop table t");
-        // System.out.println();
+        TempTable t112 = new TempTable();
+        t112.project = "*";
+        t112.isLeaf = true;
+        t112.tableName = "t2";
 
-        // SqlClient client69 = new SqlClient("10.77.70.69"); //10.77.70.68 127.0.0.1
-        // List<String> t69 = new ArrayList<>();
-        // t69.add("5, 'abc'");
-        // t69.add("6, 'def'");
-        // client69.saveTable("t", "id int, name varchar(6)", t69);
-        // System.out.println("10.77.70.69");
-        // System.out.println(client69.executeQuery("select * from t"));
-        // client69.executeNonQuery("delete from t");
-        // client69.executeNonQuery("drop table t");
-        // System.out.println();
-        Scanner scanner = new Scanner(System.in);
-        while (true) {
-            String ip = scanner.next();
-            SqlClient client = new SqlClient(ip);
-            int type = scanner.nextInt();
-            if (type == 0) {
-                scanner.nextLine();
-                String sql1 = scanner.nextLine();
-                client.executeNonQuery(sql1);
-            } else if (type == 1) {
-                scanner.nextLine();
-                String sql2 = scanner.nextLine();
-                List<String> l = client.executeQuery(sql2);
-                for (String s : l) {
-                    System.out.println(s);
-                }
-            } else if (type == 2) {
-                List<String> t = new ArrayList<>();
-                t.add("1, 'abc'");
-                t.add("2, 'def'");
-                client.saveTable("t", "id int, name varchar(6)", t);
-            } else {
-                break;
-            }
+        TempTable t121 = new TempTable();
+        t121.project = "*";
+        t121.isLeaf = true;
+        t121.tableName = "t1";
+
+        TempTable t122 = new TempTable();
+        t122.project = "*";
+        t122.isLeaf = true;
+        t122.tableName = "t2";
+
+        TempTable t11 = new TempTable();
+        t11.project = "t111.id, t111.name, t112.age";
+        t11.isLeaf = false;
+        t11.isUnion = false;
+        t11.joinAttribute = "t111.id=t112.id";
+        t11.addresses = new ArrayList<>();
+        t11.addresses.add("192.168.31.102:31100");
+        t11.addresses.add("192.168.31.102:31100");
+        t11.children = new ArrayList<>();
+        t11.children.add("t111");
+        t11.children.add("t112");
+
+        TempTable t12 = new TempTable();
+        t12.project = "t121.id, t121.name, t122.age";
+        t12.isLeaf = false;
+        t12.isUnion = false;
+        t12.joinAttribute = "t121.id=t122.id";
+        t12.addresses = new ArrayList<>();
+        t12.addresses.add("192.168.31.103:31100");
+        t12.addresses.add("192.168.31.103:31100");
+        t12.children = new ArrayList<>();
+        t12.children.add("t121");
+        t12.children.add("t122");
+
+        TempTable t1 = new TempTable();
+        t1.project = "*";
+        t1.isLeaf = false;
+        t1.isUnion = true;
+        t1.addresses = new ArrayList<>();
+        t1.addresses.add("192.168.31.102:31100");
+        t1.addresses.add("192.168.31.103:31100");
+        t1.children = new ArrayList<>();
+        t1.children.add("t11");
+        t1.children.add("t12");
+
+        EtcdClient client = new EtcdClient(Constants.ETCD_ENDPOINTS);
+        try {
+            client.put("t1", t1.toJson());
+            client.put("t11", t11.toJson());
+            client.put("t12", t12.toJson());
+            client.put("t111", t111.toJson());
+            client.put("t112", t112.toJson());
+            client.put("t121", t121.toJson());
+            client.put("t122", t122.toJson());
+        } catch (Exception e) {
+            e.printStackTrace();
         }
+        client.close();
 
-        SqlClient client = new SqlClient("127.0.0.1"); //10.77.70.68 127.0.0.1
-        client.executeNonQuery("delete from t");
-        client.executeNonQuery("drop table t");
+        SqlClient client2 = new SqlClient("192.168.31.101:31100");
+        System.out.println(client2.requestTable("t1"));
+        client2.close();
 
-        // SqlClient client67 = new SqlClient("10.77.70.67"); //10.77.70.68 127.0.0.1
-        // client67.executeNonQuery("delete from t");
-        // client67.executeNonQuery("drop table t");
+        while (true) {
 
-        // SqlClient client68 = new SqlClient("10.77.70.68"); //10.77.70.68 127.0.0.1
-        // client68.executeNonQuery("delete from t");
-        // client68.executeNonQuery("drop table t");
-
-        // SqlClient client69 = new SqlClient("10.77.70.69"); //10.77.70.68 127.0.0.1
-        // client69.executeNonQuery("delete from t");
-        // client69.executeNonQuery("drop table t");
-
-        scanner.close();
+        }
     }
 }

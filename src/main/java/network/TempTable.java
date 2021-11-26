@@ -13,7 +13,7 @@ public class TempTable {
     public String joinAttribute;
     public String tableName;
     public List<String> children;
-    public List<String> ips;
+    public List<String> addresses;
 
     public String toJson() {
         return JSON.toJSONString(this);

@@ -1,7 +1,13 @@
 package network;
 
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -31,11 +37,75 @@ import network.proto.DdbServiceGrpc.DdbServiceImplBase;
 public class SqlServer {
     private Server server;
 
+    private boolean isPortUsing(int port) throws UnknownHostException {
+        boolean flag = false;
+        InetAddress localAddress = InetAddress.getLocalHost();
+        try {
+            Socket socket = new Socket(localAddress, port);
+            flag = true;
+            socket.close();
+        } catch (IOException ignoredException) { }
+        return flag;
+    }
+
+    private String getIpAddress() {
+	    try {
+	      Enumeration<NetworkInterface> allNetInterfaces = NetworkInterface.getNetworkInterfaces();
+	      InetAddress ip = null;
+	      while (allNetInterfaces.hasMoreElements()) {
+	        NetworkInterface netInterface = (NetworkInterface) allNetInterfaces.nextElement();
+	        if (netInterface.isLoopback() || netInterface.isVirtual() || !netInterface.isUp()) {
+	          continue;
+	        } else {
+	          Enumeration<InetAddress> addresses = netInterface.getInetAddresses();
+	          while (addresses.hasMoreElements()) {
+	            ip = addresses.nextElement();
+	            if (ip != null && ip instanceof Inet4Address) {
+	              return ip.getHostAddress();
+	            }
+	          }
+	        }
+	      }
+	    } catch (Exception e) {
+	    	e.printStackTrace();
+	    }
+        return "";
+    }
+
     public void start() throws IOException {
-        server = ServerBuilder.forPort(Constants.SERVER_PORT)
-                              .addService(new DdbServiceImpl())
-                              .build()
-                              .start();
+        for (int offset = 0; offset < 65536; offset++) {
+            int port = Constants.SERVER_PORT + offset;
+            if (false == isPortUsing(port)) {
+                server = ServerBuilder.forPort(port)
+                                      .addService(new DdbServiceImpl())
+                                      .build()
+                                      .start();
+                try (EtcdClient client = new EtcdClient(Constants.ETCD_ENDPOINTS)) {
+                    client.lock();
+                    String sites = client.get(Constants.SITES_KEY);
+                    if (null == sites) {
+                        sites = "";
+                    }
+                    String ip = getIpAddress();
+                    StringBuffer siteBuffer = new StringBuffer();
+                    siteBuffer.append(ip)
+                              .append(":")
+                              .append(port);
+                    String site = siteBuffer.toString();
+                    if (false == sites.contains(site)) {
+                        if (false == sites.isEmpty()) {
+                            sites = sites + ",";
+                        }
+                        sites = sites + site;
+                        client.put(Constants.SITES_KEY, sites);
+                    }
+                    client.unlock();
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                break;
+            }
+        }
         Runtime.getRuntime().addShutdownHook(new Thread() {
             @Override
             public void run() {
@@ -56,9 +126,8 @@ public class SqlServer {
 }
 
 class DdbServiceImpl extends DdbServiceImplBase {
-    private ListenableFuture<TableResponse> getDataFromChild(String ip, String tempTableName) {
-        String target = ip + ":" + Constants.SERVER_PORT;
-        ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
+    private ListenableFuture<TableResponse> getDataFromChild(String address, String tempTableName) {
+        ManagedChannel channel = ManagedChannelBuilder.forTarget(address)
                                                       .usePlaintext()
                                                       .build();
         DdbServiceFutureStub stub = DdbServiceGrpc.newFutureStub(channel);
@@ -171,16 +240,14 @@ class DdbServiceImpl extends DdbServiceImplBase {
                              StreamObserver<TableResponse> responseObserver) {
         // 从获取ETCD中获取要执行的结点并删除
         final String tempTableName = tableRequest.getTempTableName();
-        EtcdClient etcdClient = new EtcdClient(Constants.ETCD_ENDPOINTS);
         TempTable tempTable = null;
-        try {
+        try (EtcdClient etcdClient = new EtcdClient(Constants.ETCD_ENDPOINTS)) {
             String json = etcdClient.get(tempTableName);
             tempTable = TempTable.fromJson(json);
             etcdClient.remove(tempTableName);
         } catch (Exception e) {
             e.printStackTrace();;
         }
-        etcdClient.close();
 
         if (tempTable.isLeaf) {
             // 叶子结点直接在本地执行SQL语句
@@ -190,12 +257,12 @@ class DdbServiceImpl extends DdbServiceImplBase {
             responseObserver.onCompleted();
         } else {
             // 非叶子结点
-            final List<String> ips = tempTable.ips;
+            final List<String> addresses = tempTable.addresses;
             final List<String> children = tempTable.children;
-            if (ips.size() != children.size() || ips.size() <= 0) {
+            if (addresses.size() != children.size() || addresses.size() <= 0) {
                 return;
             }
-            final int n = ips.size();
+            final int n = addresses.size();
         
             if (tempTable.isUnion) {
                 // union
@@ -203,7 +270,7 @@ class DdbServiceImpl extends DdbServiceImplBase {
                 // 从子结点获取数据并保存到同一张表中
                 List<ListenableFuture<TableResponse>> responses = new ArrayList<>();
                 for (int i = 0; i < n; i++) {
-                    responses.add(getDataFromChild(ips.get(i), children.get(i)));
+                    responses.add(getDataFromChild(addresses.get(i), children.get(i)));
                 }
                 List<String> queryResult = waitForData(responses.get(0));
                 if (queryResult.size() == 0) {
@@ -248,7 +315,7 @@ class DdbServiceImpl extends DdbServiceImplBase {
                 // 从子结点获取数据并保存到不同的表中
                 List<ListenableFuture<TableResponse>> responses = new ArrayList<>();
                 for (int i = 0; i < n; i++) {
-                    responses.add(getDataFromChild(ips.get(i), children.get(i)));
+                    responses.add(getDataFromChild(addresses.get(i), children.get(i)));
                 }
                 final CountDownLatch countDownLatch = new CountDownLatch(n);
                 for (int i = 0; i < n; i++) {   

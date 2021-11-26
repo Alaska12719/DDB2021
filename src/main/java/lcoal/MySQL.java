@@ -138,6 +138,7 @@ public class MySQL {
             statement = connection.createStatement();
             statement.execute(String.format("create database if not exists `%s`", DATABASE_NAME));
             statement.execute(String.format("use `%s`", DATABASE_NAME));
+            System.out.println(nonQuery);
             statement.execute(nonQuery);
             if (builder != null) {
                 builder.setSuccess(true);
