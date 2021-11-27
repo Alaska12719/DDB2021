@@ -8,17 +8,17 @@ public class AttributeConstant {
     }
 
     public String getRelationName() {
-        return relationName.split(".")[1];
+        return this.relationName.split("[.]")[1];
     }
     public String getAttributeName() {
-        return attributeName.split(".")[3];
+        return this.attributeName.split("[.]")[3];
     }
 
     public String getAttributeType() {
         return this.attributeName + ".type";
     }
     public String getAttributeNum() {
-        return relationName + ".attributeNum";
+        return this.relationName + ".attributeNum";
     }
 
     public String getIsExitSite(String site) {

@@ -66,9 +66,13 @@ public class EtcdClient implements AutoCloseable {
         GetResponse getResponse = kv.get(bytesOf(key)).get();
         if (getResponse.getKvs().size() > 0) {
             String value = getResponse.getKvs().get(0).getValue().toString(UTF_8);
+            if(value.charAt(0) == ',' || value.charAt(0)== '.') {
+                value = value.substring(1);
+            }
+            
             return value;
         }
-        return null;
+        return "";
     }
 
     public Map<String, String> get(List<String> keys) throws ExecutionException, InterruptedException {

@@ -15,7 +15,7 @@ public class TreeNode {
 
     }
     public boolean isUsed = true;
-    public TempTable content;
+    public TempTable content = new TempTable();
     public String fragmentId = "";
     public String site;
     public List<TreeNode> children = new ArrayList<>();

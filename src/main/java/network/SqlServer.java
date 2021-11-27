@@ -83,9 +83,6 @@ public class SqlServer {
                 try (EtcdClient client = new EtcdClient(Constants.ETCD_ENDPOINTS)) {
                     client.lock();
                     String sites = client.get(Constants.SITES_KEY);
-                    if (null == sites) {
-                        sites = "";
-                    }
                     String ip = getIpAddress();
                     StringBuffer siteBuffer = new StringBuffer();
                     siteBuffer.append(ip)

@@ -27,6 +27,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import network.Constants;
 /**
  * @author Kalven
  * @version 10.0 Created by Kalven on 2021/11/5
@@ -36,13 +37,18 @@ public class Parser {
     private EtcdClient etcdClient;
 
     public Parser() {
-        etcdClient = new EtcdClient("http://127.0.0.1:2379");
+        etcdClient = new EtcdClient(Constants.ETCD_ENDPOINTS);
     }
+
+
 
     public void closeEtcd() {
         etcdClient.close();
     }
-
+    
+    public void deleteAllEtcd() throws Exception {
+        etcdClient.removeByPrefix("");
+    }
     public enum InputState {
         SELECT, INSERT, DEFINESITE, ERROR, CREATETABLE, FRAGMENT, ALLOCATE
     }
@@ -69,6 +75,7 @@ public class Parser {
             case INSERT:
                 executeSql(input);
                 break;
+                default: executeSql(input);
         }
     }
 
@@ -151,7 +158,7 @@ public class Parser {
             for (int j = 0; j < conditions.length; j++) {
                 conditions[j] = conditions[j].trim();
                 Condition condition = parseCondition(conditions[j], tableName, false);
-                fragmentCondition += condition.toJson() + ",";
+                fragmentCondition += condition.toJson() + "%";
             }
             FragmentConstant fragmentConstant = new FragmentConstant(fragmentId);
             etcdClient.put(fragmentConstant.getConditions(), fragmentCondition);
@@ -283,6 +290,9 @@ public class Parser {
         String relationName = tablesNamesFinder.getTableList(statement).get(0);
         RelationConstant relation = new RelationConstant(relationName);
         String str = etcdClient.get(relation.getRelations());
+        if(str == null) {
+            str = "";
+        }
         str += relationName;
         etcdClient.put(relation.getRelations(), str);
 
@@ -364,9 +374,14 @@ public class Parser {
                 selectAttributes.add(attributeConstant);
             }
         }
-
-        String where = plainSelect.getWhere().toString();
-        String[] conditionStrings = where.split("AND");
+        String where = "";
+        String[] conditionStrings = new String[0];
+        if(plainSelect.getWhere() == null) {
+            
+        } else {
+            where = plainSelect.getWhere().toString();
+            conditionStrings = where.split("AND");
+        }
         for (int i = 0; i < conditionStrings.length; i++) {
             boolean haveTable = false;
             if (conditionStrings[0].contains(".")) {
@@ -375,12 +390,12 @@ public class Parser {
             Condition condition = parseCondition(conditionStrings[i], tableName, haveTable);
             conditions.add(condition);
             if (condition.leftValue.isAttribute == true) {
-                String[] attrs = condition.leftValue.attrName.split(".");
+                String[] attrs = condition.leftValue.attrName.split("[.]");
                 AttributeConstant constant = new AttributeConstant(attrs[0], attrs[1]);
                 whereAttributes.add(constant);
             }
             if (condition.rightValue.isAttribute == true) {
-                String[] attrs = condition.rightValue.attrName.split(".");
+                String[] attrs = condition.rightValue.attrName.split("[.]");
                 AttributeConstant constant = new AttributeConstant(attrs[0], attrs[1]);
                 whereAttributes.add(constant);
             }
@@ -401,7 +416,7 @@ public class Parser {
             tempTable.content.project = "";
             tempTable.content.condition = "";
             tempTable.site = etcdClient.get(fragmentConstant.getSite());
-            tableName = fragmentId.split(".")[0];
+            tableName = fragmentId.split("-")[0];
             //水平分片,默认拥有所有的属性,TO-DO 混合分片
             if (etcdClient.get(fragmentConstant.getIsHorizontal()).equals("1")) {
                 for (AttributeConstant constant : finalSet) {
@@ -415,7 +430,7 @@ public class Parser {
                 }
                 tempTable.content.condition = etcdClient.get(fragmentConstant.getConditions());
                 //遍历所有的condition,如果有冲突，过滤掉，否则把相关的过滤条件都存进去TO-DO默认左边都是attribute，右边都是值
-                String[] strs = tempTable.content.condition.split(",");//分片中所有的condition
+                String[] strs = tempTable.content.condition.split("%");//分片中所有的condition
                 List<Condition> fragmentConditions = new ArrayList<>();
                 for (int i = 0; i < strs.length; i++) {
                     Condition conditions1 = Condition.fromJson(strs[i]);
@@ -436,22 +451,22 @@ public class Parser {
                     }
                     if (tempTable.isUsed) {
                         if (isUsed) {
-                            tempTable.content.condition += "," + condition.origin;
+                            tempTable.content.condition += "," + condition.toJson();
                         }
                     } else {
                         break;
                     }
                 }
                 if (tempTable.isUsed) {
-                    if (tempTable.content.project.indexOf(0) == ',') {
+                    if (tempTable.content.project.charAt(0) == ',') {
                         tempTable.content.project = tempTable.content.project.substring(1);
                     }
-                    if (tempTable.content.condition.indexOf(0) == ',') {
+                    if (tempTable.content.condition.charAt(0) == ',') {
                         tempTable.content.condition = tempTable.content.condition.substring(1);
                     }
-                    tempTable.content.condition = tempTable.content.condition.replaceAll(",", " and ");
+                    // tempTable.content.condition = tempTable.content.condition.replaceAll(",", " and ");
                     tableName = fragmentId.split("-")[0].trim();
-                    if (horizonMaps.get(tableName).isEmpty() || horizonMaps.get(tableName).size() == 0) {
+                    if (horizonMaps.get(tableName) == null || horizonMaps.get(tableName).isEmpty()) {
                         List<TreeNode> nodes = new ArrayList<>();
                         nodes.add(tempTable);
                         horizonMaps.put(tableName, nodes);
@@ -528,7 +543,18 @@ public class Parser {
         //以下是test
 
 
-        tableNode.get(0).content.toJson();
+        for (Map.Entry<String, List<TreeNode>> entry : horizonMaps.entrySet()) {
+            TreeNode node = Union(entry.getValue());
+            etcdClient.put(node.fragmentId, regularTreeNode(node).content.toJson());
+
+            for(int i = 0; i < node.childNum; i++) {
+                etcdClient.put(node.children.get(i).fragmentId, regularTreeNode(node.children.get(i)).content.toJson());
+            }
+            SqlClient client2 = new SqlClient("192.168.31.101:31100");
+            System.out.println(client2.requestTable(node.fragmentId));
+            client2.close();
+        }
+        
 
         //以上是test
 //        //把垂直分片节点join在一起
@@ -553,9 +579,9 @@ public class Parser {
 //        //把所有的表按照join条件组合在一起
 //        for (Condition condition : conditions) {
 //            if (condition.isJoin) {
-//                TreeNode leftNode = tableNode.get(condition.leftValue.attrName.split(".")[0]);
-//                TreeNode rightNode = tableNode.get(condition.rightValue.attrName.split(".")[0]);
-//                Join(leftNode, rightNode, condition.leftValue.attrName.split(".")[1], condition.rightValue.attrName.split(".")[1]);
+//                TreeNode leftNode = tableNode.get(condition.leftValue.attrName.split("[.]")[0]);
+//                TreeNode rightNode = tableNode.get(condition.rightValue.attrName.split("[.]")[0]);
+//                Join(leftNode, rightNode, condition.leftValue.attrName.split("[.]")[1], condition.rightValue.attrName.split("[.]")[1]);
 //            }
 //        }
 
@@ -572,15 +598,36 @@ public class Parser {
         return constants;
     }
 
+    private TreeNode regularTreeNode(TreeNode node) {
+        if(node.content.project.charAt(0) == ',') {
+            node.content.project = node.content.project.substring(1);
+        }
+        String[] conditions = new String[0];
+        if(node.content.condition.length() > 0) {
+            conditions = node.content.condition.split("%");
+            node.content.condition = "";
+            for(int i = 0; i < conditions.length; i++) {
+                Condition condition = Condition.fromJson(conditions[i]);
+                node.content.condition += " and " + condition.origin;
+            }
+            node.content.condition = node.content.condition.substring(5);
+        } else {
+            node.content.condition = "";
+        }
+        return node;
+    }
     private TreeNode Union(List<TreeNode> treeNodes) {
         TreeNode parent = new TreeNode();
         parent.content.isUnion = true;
         parent.content.isLeaf = false;
         parent.content.project = treeNodes.get(0).content.project;
         parent.content.condition = "";
+        parent.content.children = new ArrayList<>();
+        parent.content.addresses = new ArrayList<>();
         for (TreeNode node : treeNodes) {
+            // node.content.project = getProjectsByTreeNode(node);
             parent.content.children.add(node.fragmentId);
-            parent.content.ips.add(node.site);
+            parent.content.addresses.add(node.site);
             parent.children.add(node);
             parent.childNum++;
             parent.site = node.site;
@@ -601,8 +648,8 @@ public class Parser {
         root.content.isUnion = false;
         root.content.children.add(treeNodes.get(0).fragmentId);
         root.content.children.add(treeNodes.get(1).fragmentId);
-        root.content.ips.add(treeNodes.get(0).site);
-        root.content.ips.add(treeNodes.get(1).site);
+        root.content.addresses.add(treeNodes.get(0).site);
+        root.content.addresses.add(treeNodes.get(1).site);
         root.childNum += 2;
         for (int i = 2; i < treeNodes.size(); i++) {
             TreeNode node = new TreeNode();
@@ -615,8 +662,8 @@ public class Parser {
             node.content.isUnion = false;
             node.content.children.add(root.fragmentId);
             node.content.children.add(treeNodes.get(i).fragmentId);
-            node.content.ips.add(root.site);
-            node.content.ips.add(treeNodes.get(i).site);
+            node.content.addresses.add(root.site);
+            node.content.addresses.add(treeNodes.get(i).site);
             node.site = root.site;
             root = node;
         }
@@ -625,9 +672,12 @@ public class Parser {
 
     private String getProjectsByTreeNode(TreeNode node) {
         String str = "";
+        if(node.content.project.charAt(0) == ',') {
+            node.content.project = node.content.project.substring(1);
+        }
         String[] strs = node.content.project.split(",");
         for (int i = 0; i < strs.length; i++) {
-            str += "," + node.fragmentId + "." + strs[i].split(".")[1];
+            str += "," + "`" + node.fragmentId + "`" + "." + strs[i].split("[.]")[1];
         }
         if (str.indexOf(0) == ',') {
             str = str.substring(1);
@@ -646,8 +696,8 @@ public class Parser {
         root.content.isUnion = false;
         root.content.children.add(leftNode.fragmentId);
         root.content.children.add(rightNode.fragmentId);
-        root.content.ips.add(leftNode.site);
-        root.content.ips.add(rightNode.site);
+        root.content.addresses.add(leftNode.site);
+        root.content.addresses.add(rightNode.site);
         root.content.joinAttribute = leftNode.fragmentId + leftAttr + "=" + rightNode.fragmentId + rightAttr;
         root.childNum += 2;
         return root;
