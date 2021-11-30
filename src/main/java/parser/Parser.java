@@ -551,7 +551,11 @@ public class Parser {
                 etcdClient.put(node.children.get(i).fragmentId, regularTreeNode(node.children.get(i)).content.toJson());
             }
             SqlClient client2 = new SqlClient("192.168.31.101:31100");
-            System.out.println(client2.requestTable(node.fragmentId));
+            // System.out.println(client2.requestTable(node.fragmentId));
+            List<String> l = client2.requestTable(node.fragmentId);
+            for (String s : l) {
+                System.out.println(s);
+            }
             client2.close();
         }
         
