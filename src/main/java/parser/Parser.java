@@ -6,6 +6,7 @@ import entity.FragmentConstant;
 import entity.RelationConstant;
 import entity.SiteConstant;
 import entity.TreeNode;
+import utils.*;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.create.table.ColumnDefinition;
@@ -26,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javafx.util.*;
 
 import network.Constants;
 /**
@@ -170,7 +172,7 @@ public class Parser {
     //将str解析成condition,haveTable表示str中存在表名了
     private Condition parseCondition(String str, String tableName, boolean haveTable) {
         String[] strs = str.split("<>|<=|>=|>|<|=");
-        Pattern p = Pattern.compile("[A-Za-z_]*");
+        Pattern p = Pattern.compile("[A-Za-z_.]*");
         Matcher m = p.matcher(strs[0].trim());
         Condition condition = new Condition();
         String additionInfo = "";
@@ -213,7 +215,7 @@ public class Parser {
         } else if (op.equals("<=")) {
             condition.op = Condition.opType.MIN_EQUAL_TO;
         }
-
+        p = Pattern.compile("[A-Za-z_.]*");
         m = p.matcher(strs[1].trim());
         if (m.matches()) {
             condition.rightValue.attrName = additionInfo + strs[1].trim();
@@ -400,6 +402,44 @@ public class Parser {
                 whereAttributes.add(constant);
             }
         }
+        List<Condition> notJoinConditions = new ArrayList<>();
+        for(int i = 0; i < conditions.size(); i++) {
+            if(!conditions.get(i).isJoin) {
+                notJoinConditions.add(conditions.get(i));
+            }
+        }
+        for(Condition condition : conditions) {
+            if(condition.isJoin) {
+                List<Condition> tmpConditions = new ArrayList<>();
+                tmpConditions.addAll(notJoinConditions);
+                for(Condition notJoinCondition : tmpConditions) {
+                    if(!notJoinCondition.isJoin && notJoinCondition.leftValue.attrName.equals(condition.leftValue.attrName)) {
+                        Condition tmpCondition = new Condition(notJoinCondition);
+                        tmpCondition.leftValue = condition.rightValue;
+                        //TO-DO 修改orign信息
+                        // tmpCondition.origin = 
+                        notJoinConditions.add(tmpCondition);
+                    }
+                    if(!notJoinCondition.isJoin && notJoinCondition.leftValue.attrName.equals(condition.rightValue.attrName)) {
+                        Condition tmpCondition = new Condition(notJoinCondition);
+                        tmpCondition.leftValue = condition.leftValue;
+                        //TO-DO 修改orign信息
+                        // tmpCondition.origin = 
+                        notJoinConditions.add(tmpCondition);
+                    }
+                }
+                
+            }
+        }
+        List<Condition> tmpConditions = new ArrayList<>();
+        tmpConditions.addAll(conditions);
+        conditions.clear();
+        for(int i = 0; i < tmpConditions.size(); i++) {
+            if(tmpConditions.get(i).isJoin){
+                conditions.add(tmpConditions.get(i));
+            }
+        }
+        conditions.addAll(notJoinConditions);
         Set<AttributeConstant> finalSet = new HashSet<>();
         finalSet.addAll(whereAttributes);
         finalSet.addAll(selectAttributes);
@@ -451,7 +491,7 @@ public class Parser {
                     }
                     if (tempTable.isUsed) {
                         if (isUsed) {
-                            tempTable.content.condition += "," + condition.toJson();
+                            tempTable.content.condition += condition.toJson() + "%";
                         }
                     } else {
                         break;
@@ -521,7 +561,7 @@ public class Parser {
                 }
                 tableName = fragmentId.split("-")[0].trim();
 
-                if (verticalMaps.get(tableName).isEmpty() || verticalMaps.get(tableName).size() == 0) {
+                if (verticalMaps.get(tableName) == null || verticalMaps.get(tableName).size() == 0) {
                     List<TreeNode> nodes = new ArrayList<>();
                     nodes.add(tempTable);
                     verticalMaps.put(tableName, nodes);
@@ -543,52 +583,331 @@ public class Parser {
         //以下是test
 
 
-        for (Map.Entry<String, List<TreeNode>> entry : horizonMaps.entrySet()) {
-            TreeNode node = Union(entry.getValue());
-            etcdClient.put(node.fragmentId, regularTreeNode(node).content.toJson());
+        // for (Map.Entry<String, List<TreeNode>> entry : horizonMaps.entrySet()) {
+        //     TreeNode node = Union(entry.getValue());
+        //     etcdClient.put(node.fragmentId, regularTreeNode(node).content.toJson());
 
-            for(int i = 0; i < node.childNum; i++) {
-                etcdClient.put(node.children.get(i).fragmentId, regularTreeNode(node.children.get(i)).content.toJson());
-            }
-            SqlClient client2 = new SqlClient("192.168.31.101:31100");
-            // System.out.println(client2.requestTable(node.fragmentId));
-            List<String> l = client2.requestTable(node.fragmentId);
-            for (String s : l) {
-                System.out.println(s);
-            }
-            client2.close();
-        }
+        //     for(int i = 0; i < node.childNum; i++) {
+        //         etcdClient.put(node.children.get(i).fragmentId, regularTreeNode(node.children.get(i)).content.toJson());
+        //     }
+        //     SqlClient client2 = new SqlClient("192.168.31.101:31100");
+        //     // System.out.println(client2.requestTable(node.fragmentId));
+        //     List<String> l = client2.requestTable(node.fragmentId);
+        //     for (String s : l) {
+        //         System.out.println(s);
+        //     }
+        //     client2.close();
+        // }
         
 
         //以上是test
-//        //把垂直分片节点join在一起
-//        for (Map.Entry<String, List<TreeNode>> entry : verticalMaps.entrySet()) {
-//            tableName = entry.getKey();
-//            List<TreeNode> treeNodes = entry.getValue();
-//            if (treeNodes.size() == 1) {
-//                if (!treeNodes.get(0).needKey) {
-//                    treeNodes.get(0).content.project = "";
-//                    String[] strs = treeNodes.get(0).content.project.split(",");
-//                    for (int i = 0; i < strs.length; i++) {
-//                        treeNodes.get(0).content.project += "," + strs[i];
-//                    }
-//                    tableNode.put(entry.getKey(), treeNodes.get(0));
-//                } else {
-//                    tableNode.put(entry.getKey(), treeNodes.get(0));
-//                }
-//            } else {
-//                tableNode.put(entry.getKey(), JoinLeaf(treeNodes));
-//            }
-//        }
-//        //把所有的表按照join条件组合在一起
-//        for (Condition condition : conditions) {
-//            if (condition.isJoin) {
-//                TreeNode leftNode = tableNode.get(condition.leftValue.attrName.split("[.]")[0]);
-//                TreeNode rightNode = tableNode.get(condition.rightValue.attrName.split("[.]")[0]);
-//                Join(leftNode, rightNode, condition.leftValue.attrName.split("[.]")[1], condition.rightValue.attrName.split("[.]")[1]);
-//            }
-//        }
 
+        //根据join条件级联剪枝
+
+       //把垂直分片节点join在一起
+       for (Map.Entry<String, List<TreeNode>> entry : verticalMaps.entrySet()) {
+             tableNode.put(entry.getKey(), JoinAsUnion(entry.getValue()));
+        //    tableName = entry.getKey();
+        //    List<TreeNode> treeNodes = entry.getValue();
+        //    if (treeNodes.size() == 1) {
+        //        if (!treeNodes.get(0).needKey) {
+        //            treeNodes.get(0).content.project = "";
+        //            String[] strs = treeNodes.get(0).content.project.split(",");
+        //            for (int i = 0; i < strs.length; i++) {
+        //                treeNodes.get(0).content.project += "," + strs[i];
+        //            }
+        //            tableNode.put(entry.getKey(), treeNodes.get(0));
+        //        } else {
+        //            tableNode.put(entry.getKey(), treeNodes.get(0));
+        //        }
+        //    } else {
+        //        tableNode.put(entry.getKey(), JoinLeaf(treeNodes));
+        //    }
+       }
+
+       List<Pair<TreeNode, TreeNode>> conflictPairs = new ArrayList<>();
+       List<Pair<TreeNode, TreeNode>> joinPairs = new ArrayList<>();
+       for (Condition condition : conditions) {
+            if (condition.isJoin) {
+                String leftTable = condition.leftValue.attrName.split("[.]")[0];
+                String leftAttr = condition.leftValue.attrName.split("[.]")[1];
+                String rightTable = condition.rightValue.attrName.split("[.]")[0];
+                String rightAttr = condition.rightValue.attrName.split("[.]")[1];
+                TreeNode leftRoot = tableNode.get(leftTable);
+                TreeNode rightRoot = tableNode.get(rightTable);
+                for(int i = 0; i < leftRoot.childNum; i++) {
+                    for(int j = 0; j < rightRoot.childNum; j++) {
+                        String[] leftConditiosString = leftRoot.children.get(i).content.condition.split("%");
+                        String[] rightConditionsString = rightRoot.children.get(j).content.condition.split("%");
+                        boolean isConflict = false;
+                        for(int ii = 0; ii < leftConditiosString.length; ii++) {
+                            if(isConflict) {
+                                break;
+                            }
+                            Condition leftCondition = Condition.fromJson(leftConditiosString[ii]);
+                            if(leftCondition != null && leftCondition.leftValue.attrName.equals(condition.leftValue.attrName)) {
+                                leftCondition.leftValue.attrName = condition.rightValue.attrName;
+                                for(int jj = 0; jj < rightConditionsString.length; jj++) {
+                                    Condition rightCondition = Condition.fromJson(rightConditionsString[jj]);
+                                    if(rightCondition != null && leftCondition.leftValue.attrName.equals(rightCondition.leftValue.attrName) && leftCondition.isConflict(rightCondition)) {
+                                        conflictPairs.add(new Pair<TreeNode,TreeNode>(leftRoot.children.get(i), rightRoot.children.get(j)));
+                                        isConflict = true;
+                                    }
+                                    if(isConflict) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }                                    
+                        if(isConflict) {
+                            continue;
+                        }
+                        for(int ii = 0; ii < rightConditionsString.length; ii++) {
+                            if(isConflict) {
+                                break;
+                            }
+                            Condition rightCondition = Condition.fromJson(rightConditionsString[ii]);
+                            if(rightCondition != null && rightCondition.leftValue.attrName.equals(condition.rightValue.attrName)) {
+                                rightCondition.leftValue.attrName = condition.leftValue.attrName;
+                                for(int jj = 0; jj < leftConditiosString.length; jj++) {
+                                    Condition leftCondition = Condition.fromJson(leftConditiosString[jj]);
+                                    if(leftCondition != null && leftCondition.leftValue.attrName.equals(rightCondition.leftValue.attrName) && rightCondition.isConflict(leftCondition)) {
+                                        conflictPairs.add(new Pair<TreeNode,TreeNode>(leftRoot.children.get(i), rightRoot.children.get(j)));
+                                        isConflict = true;
+                                    }
+                                    if(isConflict) {
+                                        break;
+                                    }
+                                }
+                            }
+                        }  
+                        if(isConflict) {
+                            continue;
+                        }
+                        joinPairs.add(new Pair<TreeNode,TreeNode>(leftRoot.children.get(i), rightRoot.children.get(j)));
+                    }
+                }
+            }
+        }
+        //选出size和的最大关系
+        String maxPos = "";
+        for(Map.Entry<String, TreeNode> entry: tableNode.entrySet()) {
+            int maxRes = 0;
+            int sum = 0;
+            for(int i = 0;i < entry.getValue().childNum; i++) {
+                sum += getTreeNodeSize(entry.getValue().children.get(i));
+            }
+            if(sum > maxRes) {
+                maxRes = sum;
+                maxPos = entry.getKey();
+            }
+        }
+
+        Graph myGraph = new Graph();
+        for(int i = 0; i < joinPairs.size(); i++) {
+            myGraph.addPair(joinPairs.get(i));
+        }
+
+        //选出执行站点
+        TreeNode maxRoot = tableNode.get(maxPos);
+        List<String> notSiteList = new ArrayList<>();
+        List<String> siteList = new ArrayList<>();
+        Map<String,Map<String, Set<TreeNode>>> siteMap = new HashMap<>();
+        Set<TreeNode> unUsedNodes = new HashSet<>();
+        for(int i = 0; i < maxRoot.childNum; i++) {
+            TreeNode executeSite = new TreeNode();
+            String mainSite = maxRoot.children.get(i).site;
+            int sum = 0;
+            List<TreeNode> siteNodes = myGraph.visit(maxRoot.children.get(i));
+            Map<String, Set<TreeNode>> curMap = new HashMap<>();
+            for(TreeNode node : siteNodes) {
+                tableName = node.fragmentId.split("-")[0];
+                if(curMap.containsKey(tableName)) {
+                    curMap.get(tableName).add(node);
+                } else {
+                    Set<TreeNode> nodeSet = new HashSet<>();
+                    nodeSet.add(node);
+                    curMap.put(tableName, nodeSet);
+                }
+            }
+            siteMap.put(mainSite, curMap);
+            List<TreeNode> sameSiteNodes = getSameSiteNodes(maxRoot.children.get(i), siteNodes);
+            siteList.removeAll(sameSiteNodes);
+            for(TreeNode node : siteNodes) {
+                sum += getTreeNodeSize(node);
+            }
+            // for(int j = 0; j < joinPairs.size(); j++) {
+            //     if(joinPairs.get(j).getKey().fragmentId.equals(maxRoot.children.get(i).fragmentId)) {
+            //         if(!mainSite.equals(joinPairs.get(j).getValue().site)) {
+            //             sum += getTreeNodeSize(joinPairs.get(j).getValue());
+            //             tableName = joinPairs.get(j).getValue().fragmentId.split("-")[0];
+            //             if(siteMap.get(mainSite) == null) {
+            //                 Map<String, Set<TreeNode>> map = new HashMap<>();
+            //                 Set<TreeNode> nodes = new HashSet<>();
+            //                 nodes.add(joinPairs.get(j).getValue());
+            //                 map.put(tableName, nodes);
+            //                 siteMap.put(mainSite, map);
+            //             } else {
+            //                 Map<String, Set<TreeNode>> map = siteMap.get(mainSite);
+            //                 if(map.get(tableName) == null) {
+            //                     Set<TreeNode> nodes = new HashSet<>();
+            //                     nodes.add(joinPairs.get(j).getValue());
+            //                     map.put(tableName, nodes);
+            //                 } else {
+            //                     Set<TreeNode> nodes = map.get(tableName);
+            //                     nodes.add(joinPairs.get(j).getValue());
+            //                     map.put(tableName, nodes);
+            //                 }
+            //                 siteMap.put(mainSite, map);
+            //             }
+            //         }
+            //         continue;
+            //     }
+            //     if(joinPairs.get(j).getValue().fragmentId.equals(maxRoot.children.get(i).fragmentId)) {
+            //         if(!mainSite.equals(joinPairs.get(j).getKey().site)) {
+            //             sum += getTreeNodeSize(joinPairs.get(j).getKey());
+            //             tableName = joinPairs.get(j).getKey().fragmentId.split("-")[0];
+            //             if(siteMap.get(mainSite) == null) {
+            //                 Map<String, Set<TreeNode>> map = new HashMap<>();
+            //                 Set<TreeNode> nodes = new HashSet<>();
+            //                 nodes.add(joinPairs.get(j).getKey());
+            //                 map.put(tableName, nodes);
+            //                 siteMap.put(mainSite, map);
+            //             } else {
+            //                 Map<String, Set<TreeNode>> map = siteMap.get(mainSite);
+            //                 if(map.get(tableName) == null) {
+            //                     Set<TreeNode> nodes = new HashSet<>();
+            //                     nodes.add(joinPairs.get(j).getKey());
+            //                     map.put(tableName, nodes);
+            //                 } else {
+            //                     Set<TreeNode> nodes = map.get(tableName);
+            //                     nodes.add(joinPairs.get(j).getKey());
+            //                     map.put(tableName, nodes);
+            //                 }
+            //                 siteMap.put(mainSite, map);
+            //             }
+            //         }
+            //         continue;
+            //     }
+            //     //没有出现在pair中的节点
+            //     unUsedNodes.add(joinPairs.get(j).getKey());
+            //     unUsedNodes.add(joinPairs.get(j).getValue());
+            // }
+            if(sum < getTreeNodeSize(maxRoot.children.get(i))) {
+                siteList.add(mainSite);
+            } else {
+                notSiteList.add(mainSite);
+            }
+        }
+        if(siteList.isEmpty()) {
+            siteList.add(maxRoot.children.get(0).site);
+        }
+        //开始合并site到主节点
+        Map<String,Set<TreeNode>> nmap = siteMap.get(siteList.get(0));
+        for(int i = 0; i < notSiteList.size(); i++) {
+            Map<String,Set<TreeNode>> map = siteMap.get(notSiteList.get(i));
+            for(Map.Entry<String,Set<TreeNode>> entry: map.entrySet()) {
+                if(nmap.containsKey(entry.getKey())) {
+                    Set<TreeNode> nodes = nmap.get(entry.getKey());
+                    nodes.addAll(entry.getValue());
+                    nmap.put(entry.getKey(), nodes);
+                } else {
+                    nmap.put(entry.getKey(), entry.getValue());
+                }
+            }
+        }   
+        //把垂直分片的叶子节点放到同一个节点上，，先join成一张表
+
+        siteMap.put(siteList.get(0), nmap);
+        Map<String,Map<String,TreeNode>> secondMap = new HashMap<>();
+        //开始合并子节点
+        for(int i = 0; i < siteList.size(); i++) {
+            Map<String, TreeNode> tmpMap = new HashMap<>();
+            for(Map.Entry<String,Set<TreeNode>> entry: siteMap.get(siteList.get(i)).entrySet()) {
+                List<TreeNode> lNodes = new ArrayList<>();
+                lNodes.addAll(entry.getValue());
+                if(tableNode.get(entry.getKey()).content.isUnion) {
+                    if(lNodes.size() > 1) {
+                        TreeNode node = Union(lNodes);
+                        node.site = siteList.get(i);
+                        tmpMap.put(entry.getKey(), node);
+                    } else {
+                        tmpMap.put(entry.getKey(), lNodes.get(0));
+                    }
+                } else {
+                    if(lNodes.size() > 1) {
+                        TreeNode node = JoinLeaf(lNodes);
+                        node.site = siteList.get(i);
+                        tmpMap.put(entry.getKey(), node);
+                    } else {
+                        tmpMap.put(entry.getKey(), lNodes.get(0));
+                    }
+                }
+            }
+            secondMap.put(siteList.get(i), tmpMap);
+        }
+
+        List<TreeNode> siteFinalList = new ArrayList<>();
+        for(int i = 0; i < siteList.size(); i++) {
+            TreeNode finalNode = new TreeNode();
+            for (Condition condition : conditions) {
+                if (condition.isJoin) {
+                    TreeNode leftNode = secondMap.get(siteList.get(i)).get(condition.leftValue.attrName.split("[.]")[0]);
+                    TreeNode rightNode =  secondMap.get(siteList.get(i)).get(condition.rightValue.attrName.split("[.]")[0]);
+                    TreeNode root = Join(leftNode, rightNode, condition.leftValue.attrName, condition.rightValue.attrName, siteList.get(i));
+                    secondMap.get(siteList.get(i)).put(condition.leftValue.attrName.split("[.]")[0], root);
+                    secondMap.get(siteList.get(i)).put(condition.rightValue.attrName.split("[.]")[0], root);
+                    finalNode = root;
+                }
+            }
+            siteFinalList.add(finalNode);
+            // List<TreeNode> tmpList = new ArrayList<>();
+            // for(Map.Entry<String, TreeNode> entry : secondMap.get(siteList.get(i)).entrySet()) {
+            //     boolean allConflict = true;
+            //     for(int j = 0; j < tmpList.size(); j++) {
+            //         if(entry.getValue().fragmentId.equals(tmpList.get(j).fragmentId)) {
+            //             allConflict = false;
+            //         }
+            //     }
+            //     if(allConflict) {
+            //         tmpList.add(entry.getValue());
+            //     }
+            // }
+            // tmpList.
+            // secondMap.get(i)
+        }
+        TreeNode finalRoot = siteFinalList.get(0);
+        if(siteFinalList.size() > 1) {
+            finalRoot = Union(siteFinalList);
+        }
+        reviseLeafNode(finalRoot);
+        storeInEtcd(finalRoot);
+        //对于所有的叶子节点，加上as语句生成相应的表
+
+
+       //把所有的表按照join条件组合在一起
+    //    TreeNode realNode = new TreeNode();
+    //    for (Condition condition : conditions) {
+    //        if (condition.isJoin) {
+    //            TreeNode leftNode = tableNode.get(condition.leftValue.attrName.split("[.]")[0]);
+    //            TreeNode rightNode = tableNode.get(condition.rightValue.attrName.split("[.]")[0]);
+    //            TreeNode root = Join(leftNode, rightNode, condition.leftValue.attrName.split("[.]")[1], condition.rightValue.attrName.split("[.]")[1]);
+    //            tableNode.put(condition.leftValue.attrName.split("[.]")[0], root);
+    //            tableNode.put(condition.rightValue.attrName.split("[.]")[0], root);
+    //            realNode = root;
+    //        }
+    //    }
+    //    Map<String, Boolean> boolMap = new HashMap<>();
+    //    List<TreeNode> nodes = new ArrayList<>();
+    //    for(Map.Entry<String, TreeNode> entry: tableNode.entrySet()) {
+    //        if(boolMap.containsKey(entry.getValue().fragmentId)){
+    //            continue;
+    //        }
+    //        boolMap.put(entry.getValue().fragmentId, true);
+    //        nodes.add(entry.getValue());
+    //    }
+    //    realNode = Union(nodes);
+    //    realNode.fragmentId  = "1";
     }
 
     //找到所有含有table的属性
@@ -602,6 +921,9 @@ public class Parser {
         return constants;
     }
 
+    private void reviseLeaf(TreeNode root) {
+        
+    }
     private TreeNode regularTreeNode(TreeNode node) {
         if(node.content.project.charAt(0) == ',') {
             node.content.project = node.content.project.substring(1);
@@ -620,9 +942,46 @@ public class Parser {
         }
         return node;
     }
+    private int getTreeNodeSize(TreeNode node) {
+        return 1;
+    }
+    private void parseTreeToEtcd(TreeNode root) {
+        if(root.content.isLeaf) {
+            return;
+        }
+        if(!root.content.isLeaf) {
+            for(int i = 0; i < root.childNum; i++) {
+                parseTreeToEtcd(root.children.get(i));
+            }
+            if(root.content.isUnion) {
+                root.content.project = root.children.get(0).content.project;
+            }
+        }
+    }
+
     private TreeNode Union(List<TreeNode> treeNodes) {
         TreeNode parent = new TreeNode();
         parent.content.isUnion = true;
+        parent.content.isLeaf = false;
+        parent.content.project += getUnionProjects(treeNodes.get(0));
+        parent.content.condition = "";
+        parent.content.children = new ArrayList<>();
+        parent.content.addresses = new ArrayList<>();
+        for (TreeNode node : treeNodes) {
+            parent.content.children.add(node.fragmentId);
+            parent.content.addresses.add(node.site);
+            parent.children.add(node);
+            parent.childNum++;
+            parent.site = node.site;
+            parent.fragmentId += node.fragmentId;
+            parent.content.tableName = parent.fragmentId;
+        }
+        return parent;
+    }
+
+    private TreeNode JoinAsUnion(List<TreeNode> treeNodes) {
+        TreeNode parent = new TreeNode();
+        parent.content.isUnion = false;
         parent.content.isLeaf = false;
         parent.content.project = treeNodes.get(0).content.project;
         parent.content.condition = "";
@@ -641,13 +1000,20 @@ public class Parser {
         return parent;
     }
 
-    private TreeNode JoinLeaf(List<TreeNode> treeNodes) {
+    private TreeNode JoinLeaf(List<TreeNode> treeNodes) throws Exception {
         TreeNode root = new TreeNode();
         root.site = treeNodes.get(0).site;
         root.children.add(treeNodes.get(0));
         root.children.add(treeNodes.get(1));
         root.content.project = "";
-        root.content.project += getProjectsByTreeNode(treeNodes.get(0)) + "," + getProjectsByTreeNode(treeNodes.get(1));
+        root.fragmentId = treeNodes.get(0).fragmentId + treeNodes.get(1).fragmentId;
+        root.content.tableName = root.fragmentId;
+        String relationName = treeNodes.get(0).fragmentId.split("-")[0];
+        AttributeConstant attributeConstant = new AttributeConstant(relationName, "");
+        String key = etcdClient.get(attributeConstant.relationKey());
+        root.content.joinAttribute = "`" + treeNodes.get(0).fragmentId + "`"  + "." + "`" + relationName  + "." + key + "`" +  "=" + "`" + treeNodes.get(1).fragmentId + "`" + "."  + "`" + relationName  + "." + key + "`";
+        //只留一个key
+        root.content.project += getProjectsByLeaf(treeNodes.get(0)) + "," + getProjectsByTreeNodeExcludeKey(treeNodes.get(1), key);
         root.content.isLeaf = false;
         root.content.isUnion = false;
         root.content.children.add(treeNodes.get(0).fragmentId);
@@ -661,7 +1027,8 @@ public class Parser {
             node.children.add(treeNodes.get(i));
             node.childNum += 2;
             node.content.project = "";
-            node.content.project += root.content.project + "," + getProjectsByTreeNode(treeNodes.get(i));
+            root.content.joinAttribute = "`" + root.fragmentId + "`"  + "." + "`" + relationName  + "." + key + "`" +  "=" + "`" + treeNodes.get(i).fragmentId + "`" + "."  + "`" + relationName  + "." + key + "`";
+            node.content.project += getProjectsByTreeNode(root) + "," + getProjectsByTreeNodeExcludeKey(treeNodes.get(i), key);
             node.content.isLeaf = false;
             node.content.isUnion = false;
             node.content.children.add(root.fragmentId);
@@ -680,21 +1047,149 @@ public class Parser {
             node.content.project = node.content.project.substring(1);
         }
         String[] strs = node.content.project.split(",");
-        for (int i = 0; i < strs.length; i++) {
-            str += "," + "`" + node.fragmentId + "`" + "." + strs[i].split("[.]")[1];
+        if(node.content.isLeaf || node.content.isUnion) {
+            for(int i = 0; i < strs.length - 1; i++) {
+                str += "`" + node.fragmentId + "`" + ".";
+                if(node.content.isLeaf) {
+                    str += "`" + strs[i] + "`";
+                } else {
+                    str += strs[i]; 
+                }
+                str += ",";
+            }
+            str += "`" + node.fragmentId + "`" + ".";
+            if(node.content.isLeaf) {
+                str += "`" + strs[strs.length - 1] + "`";
+            } else {
+                str += strs[strs.length - 1]; 
+            }
+            return str;
         }
-        if (str.indexOf(0) == ',') {
+        //不是叶子节点或union节点
+        for (int i = 0; i < strs.length; i++) {
+            String[] attrs = strs[i].split("[.]");
+            if(attrs.length == 2) {
+                str += "," + "`" + node.fragmentId + "`" + "." + attrs[1];
+            } else {
+                str += "," + "`" + node.fragmentId + "`" + ".";
+                for(int j = 1; j < attrs.length - 1; j++) {
+                     str += attrs[j] + ".";
+                }
+                str += attrs[attrs.length - 1];
+            }
+        }
+        if (str.charAt(0) == ',') {
+            str = str.substring(1);
+        }
+        return str;
+    }
+    private String getProjectsByLeaf(TreeNode node) {
+        String str = "";
+        if(node.content.project.charAt(0) == ',') {
+            node.content.project = node.content.project.substring(1);
+        }
+        String[] strs = node.content.project.split(",");
+        for (int i = 0; i < strs.length - 1; i++) {
+            str += "`" + node.fragmentId + "`" + "." + "`" + strs[i].trim() + "`" + ",";
+        }
+        str += "`" + node.fragmentId + "`" + "." + "`" + strs[strs.length - 1].trim() + "`";
+        if (str.charAt(0) == ',') {
+            str = str.substring(1);
+        }
+        return str;
+    }
+    private String getUnionProjects(TreeNode node) {
+        String str = "";
+        if(node.content.project.charAt(0) == ',') {
+            node.content.project = node.content.project.substring(1);
+        }
+        String[] strs = node.content.project.split(",");
+        //如果是叶子节点
+        if(node.content.isLeaf) {
+            for (int i = 0; i < strs.length; i++) {
+                str += "," + "`" + strs[i] + "`";
+            }
+        } else {
+            for (int i = 0; i < strs.length; i++) {
+                String[] attrs = strs[i].split("[.]");
+                if(attrs.length == 2) {
+                    str += "," + attrs[1];
+                } else {
+                    str += ",";
+                    for(int j = 1; j < attrs.length; j++) {
+                        str += attrs[j];
+                    }
+                }
+            }
+        }
+        if (str.charAt(0) == ',') {
+            str = str.substring(1);
+        }
+        return str;
+    }
+    private String getProjectsByTreeNodeExcludeKey(TreeNode node, String key) {
+        String str = "";
+        if(node.content.project.charAt(0) == ',') {
+            node.content.project = node.content.project.substring(1);
+        }
+        String[] strs = node.content.project.split(",");
+        for (int i = 0; i < strs.length - 1; i++) {
+            String attr = strs[i].split("[.]")[1];
+            if(!attr.equals(key)) {
+                str += "`" + node.fragmentId + "`" + "." + "`" + strs[i].trim() + "`" + ",";
+            }
+        }
+        String attr = strs[strs.length - 1].split("[.]")[1];
+        if(!attr.equals(key)) {
+            str += "`" + node.fragmentId + "`" + "." + "`" + strs[strs.length - 1].trim() + "`";
+        }
+        if (str.charAt(0) == ',') {
             str = str.substring(1);
         }
         return str;
     }
 
-    private TreeNode Join(TreeNode leftNode, TreeNode rightNode, String leftAttr, String rightAttr) {
+
+    private List<TreeNode> getSameSiteNodes(TreeNode root, List<TreeNode> nodes) {
+        List<TreeNode> resNodes = new ArrayList<>();
+        for(TreeNode node : nodes) {
+            if(node.site.equals(root.site)) {
+                resNodes.add(node);
+            }
+        }
+        return resNodes;
+    }
+
+    private void reviseLeafNode(TreeNode root) {
+        if(root.content.isLeaf) {
+            String res = "";
+            String[] strs = root.content.project.split(",");
+            for(int i = 0; i < strs.length - 1; i++) {
+                res += strs[i] + " as " + "`" +strs[i] + "`" + ",";
+            }
+            res += strs[strs.length - 1] + "as" + "`" +strs[strs.length - 1] + "`";
+            root.content.project = res;
+            return ;
+        } else {
+            for(int i = 0; i < root.children.size(); i++) {
+                reviseLeafNode(root.children.get(i));
+            }
+        }
+    }
+    private void storeInEtcd(TreeNode root) throws Exception{
+        etcdClient.put(root.fragmentId, root.content.toJson());
+        for(int i = 0; i < root.children.size(); i++) {
+            storeInEtcd(root.children.get(i));
+        }
+    }
+    private TreeNode Join(TreeNode leftNode, TreeNode rightNode, String leftAttr, String rightAttr, String site) {
         TreeNode root = new TreeNode();
-        root.site = leftNode.site;
+        root.site = site;
         root.children.add(leftNode);
         root.children.add(rightNode);
         root.content.project = "";
+        root.fragmentId += leftNode.fragmentId +rightNode.fragmentId;
+        root.content.tableName = root.fragmentId;
         root.content.project += getProjectsByTreeNode(leftNode) + "," + getProjectsByTreeNode(rightNode);
         root.content.isLeaf = false;
         root.content.isUnion = false;
@@ -702,7 +1197,7 @@ public class Parser {
         root.content.children.add(rightNode.fragmentId);
         root.content.addresses.add(leftNode.site);
         root.content.addresses.add(rightNode.site);
-        root.content.joinAttribute = leftNode.fragmentId + leftAttr + "=" + rightNode.fragmentId + rightAttr;
+        root.content.joinAttribute = "`" + leftNode.fragmentId + "`" + "." + "`" + leftAttr + "`" + "=" + "`" + rightNode.fragmentId + "`" + "." + "`" + rightAttr + "`";
         root.childNum += 2;
         return root;
     }

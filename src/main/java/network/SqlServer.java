@@ -6,7 +6,9 @@ import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.Socket;
 import java.net.UnknownHostException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -235,8 +237,17 @@ class DdbServiceImpl extends DdbServiceImplBase {
     @Override
     public void requestTable(TableRequest tableRequest, 
                              StreamObserver<TableResponse> responseObserver) {
+                                //  try {
+								// 	Thread.sleep(5000);
+								// } catch (InterruptedException e1) {
+								// 	// TODO Auto-generated catch block
+								// 	e1.printStackTrace();
+								// }
         // 从获取ETCD中获取要执行的结点并删除
         final String tempTableName = tableRequest.getTempTableName();
+        // Date dNow = new Date( );
+        // SimpleDateFormat ft = new SimpleDateFormat ("yyyy-MM-dd hh:mm:ss");
+        // System.out.println("当前时间为: " + ft.format(dNow) + " " + tempTableName);
         TempTable tempTable = null;
         try (EtcdClient etcdClient = new EtcdClient(Constants.ETCD_ENDPOINTS)) {
             String json = etcdClient.get(tempTableName);

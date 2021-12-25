@@ -14,12 +14,25 @@ public class Condition {
         public Value() {
 
         }
+        public Value(Value cloneValue) {
+            isAttribute = cloneValue.isAttribute;
+            attrName = cloneValue.attrName;
+            value = cloneValue.value;
+        }
 
         public Boolean isAttribute;
         public String attrName;
         public String value;
     }
 
+    public Condition(Condition cloneCondition) {
+        leftValue = new Value(cloneCondition.leftValue);
+        rightValue = new Value(cloneCondition.rightValue);
+        this.isJoin = cloneCondition.isJoin;
+        this.op = cloneCondition.op;
+        this.origin = cloneCondition.origin;
+    }
+    
     public Condition() {
         leftValue = new Value();
         rightValue = new Value();
@@ -104,12 +117,12 @@ public class Condition {
             }
         }
         if(this.op == opType.EQUAL_TO_STRING && c1.op == opType.EQUAL_TO_STRING) {
-            if(!c1.rightValue.equals(this.rightValue)) {
+            if(!c1.rightValue.value.equals(this.rightValue.value)) {
                 return true;
             }
         }
         if(this.op == opType.EQUAL_TO_STRING && c1.op == opType.NOT_EQUAL_TOSTRING) {
-            if(c1.rightValue.equals(this.rightValue)) {
+            if(c1.rightValue.value.equals(this.rightValue.value)) {
                 return true;
             }
         }

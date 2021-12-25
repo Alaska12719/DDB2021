@@ -17,9 +17,9 @@ public class TreeNode {
     public boolean isUsed = true;
     public TempTable content = new TempTable();
     public String fragmentId = "";
-    public String site;
+    public String site = "";
     public List<TreeNode> children = new ArrayList<>();
     public int childNum = 0;
     //是否需要key,false表示实际上没有key
-    public boolean needKey;
+    public boolean needKey = true;
 }
