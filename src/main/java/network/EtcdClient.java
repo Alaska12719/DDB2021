@@ -72,6 +72,14 @@ public class EtcdClient implements AutoCloseable {
             
             return value;
         }
+        // if (getResponse.getKvs().size() > 0) {
+        //     String value = getResponse.getKvs().get(0).getValue().toString(UTF_8);
+        //     if(value.charAt(0) == ',' || value.charAt(0)== '.') {
+        //         value = value.substring(1);
+        //     }
+            
+        //     return value;
+        // }
         return "";
     }
 

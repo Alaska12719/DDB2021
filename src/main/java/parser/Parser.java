@@ -7,10 +7,14 @@ import entity.RelationConstant;
 import entity.SiteConstant;
 import entity.TreeNode;
 import utils.*;
+import net.sf.jsqlparser.expression.operators.relational.ExpressionList;
+import net.sf.jsqlparser.expression.operators.relational.ItemsList;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
 import net.sf.jsqlparser.statement.create.table.ColumnDefinition;
 import net.sf.jsqlparser.statement.create.table.CreateTable;
+import net.sf.jsqlparser.statement.delete.Delete;
+import net.sf.jsqlparser.statement.insert.Insert;
 import net.sf.jsqlparser.statement.select.AllColumns;
 import net.sf.jsqlparser.statement.select.PlainSelect;
 import net.sf.jsqlparser.statement.select.Select;
@@ -18,15 +22,25 @@ import net.sf.jsqlparser.statement.select.SelectExpressionItem;
 import net.sf.jsqlparser.util.TablesNamesFinder;
 import network.EtcdClient;
 import network.SqlClient;
+import network.SqlServer;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.management.relation.Relation;
+import javax.swing.text.AbstractDocument.Content;
+
 import javafx.util.*;
 
 import network.Constants;
@@ -52,7 +66,7 @@ public class Parser {
         etcdClient.removeByPrefix("");
     }
     public enum InputState {
-        SELECT, INSERT, DEFINESITE, ERROR, CREATETABLE, FRAGMENT, ALLOCATE
+        SELECT, INSERT, DEFINESITE, ERROR, CREATETABLE, FRAGMENT, ALLOCATE, LOAD, DELETE,LOAD_DATA
     }
 
     ;
@@ -75,8 +89,15 @@ public class Parser {
                 allocateFragment(input);
                 break;
             case INSERT:
-                executeSql(input);
+                parse_insert(input);
                 break;
+            case DELETE:
+                parse_delete(input);
+                break;
+            case LOAD_DATA:
+                loadTSV(input.substring(9).trim());
+                break;
+            // case LOAD:
                 default: executeSql(input);
         }
     }
@@ -102,23 +123,285 @@ public class Parser {
         if (input.contains("insert")) {
             return InputState.INSERT;
         }
+        if(input.contains("delete")) {
+            return InputState.DELETE;
+        }
+        if(input.contains("LOAD_DATA")) {
+            return InputState.LOAD_DATA;
+        }
+        // if(input.contains("load")) {
+        //     return InputState.LOAD;
+        // }
         return InputState.ERROR;
     }
 
+    private void parse_delete(String input) throws Exception {
+        String fragments = "";
+        FragmentConstant Constant = new FragmentConstant("");
+        fragments += etcdClient.get(Constant.getFragments());
+        List<String> fragmentList = new ArrayList<>();
+        Delete deleteStatement = (Delete) CCJSqlParserUtil.parse(input);
+        TablesNamesFinder tablesNamesFinder = new TablesNamesFinder();
+        //单表情况下
+        String tableName = tablesNamesFinder.getTableList(deleteStatement).get(0);
+        String[] fragmentSplits = fragments.split(",");
+        for(int i = 0; i < fragmentSplits.length; i++) {
+            if(fragmentSplits[i].contains(tableName)) {
+                fragmentList.add(fragmentSplits[i]);
+            }
+        }
+        FragmentConstant fragmentConstant = new FragmentConstant(fragmentList.get(0));
+        String isHorizon = etcdClient.get(fragmentConstant.getIsHorizontal());
+        //水平分片
+        if(isHorizon.contains("1")) {
+            executeSql(input);
+        } else {
+            String where = "";
+            if(deleteStatement.getWhere() == null) {
+                executeSql(input);
+            } else {
+                where = deleteStatement.getWhere().toString();
+                String select = "select id from " + tableName + " where " + where;
+                List<String> ids = parseSelectSql(select);
+                if(ids.size() == 1) {
+                    return;
+                }
+                String sql = "delete from " + tableName + " where ";
+                for(int i = 1; i < ids.size() - 1; i++) {
+                    sql += "id=" + ids.get(i).substring(1,ids.get(i).length() - 1)+ " or ";
+                }
+                sql += "id=" + ids.get(ids.size() - 1).substring(1,ids.get(ids.size() - 1).length() - 1);
+                executeSql(sql);
+            }
+        }
+    }
+
+    private void parse_insert(String input) throws Exception {
+        String fragments = "";
+        FragmentConstant Constant = new FragmentConstant("");
+        fragments += etcdClient.get(Constant.getFragments());
+        List<String> fragmentList = new ArrayList<>();
+        Insert insertStatement = (Insert) CCJSqlParserUtil.parse(input);
+        TablesNamesFinder tablesNamesFinder = new TablesNamesFinder();
+        //单表情况下
+        String tableName = tablesNamesFinder.getTableList(insertStatement).get(0);
+        String[] fragmentSplits = fragments.split(",");
+        for(int i = 0; i < fragmentSplits.length; i++) {
+            if(fragmentSplits[i].contains(tableName)) {
+                fragmentList.add(fragmentSplits[i]);
+            }
+        }
+        FragmentConstant fragmentConstant = new FragmentConstant(fragmentList.get(0));
+        RelationConstant relationConstant = new RelationConstant(tableName);
+        String isHorizon = etcdClient.get(fragmentConstant.getIsHorizontal());
+        String etcdAttribute = etcdClient.get(relationConstant.getAttributes());
+        if(etcdAttribute.charAt(0) == ',') {
+            etcdAttribute = etcdAttribute.substring(1);
+        }
+        String[] attributes = etcdAttribute.split(",");
+        //水平分片
+        if(isHorizon.contains("1")) {
+            List<Condition> conditions = new ArrayList<>();
+            ExpressionList columns = (ExpressionList)insertStatement.getItemsList();
+            for(int i = 0; i < attributes.length; i++) {
+                String s = attributes[i] + "=" + columns.getExpressions().get(i).toString();
+                Condition condition = parseCondition(s, tableName, false);
+                conditions.add(condition);
+            }
+            for(int i = 0; i < fragmentList.size(); i++) {
+                FragmentConstant fConstant = new FragmentConstant(fragmentList.get(i));
+                String[] fragmentConditions = etcdClient.get(fConstant.getConditions()).split("%");
+                Boolean isConflict = false;
+                for(int j = 0; j < fragmentConditions.length; j++) {
+                    for(int k = 0; k < conditions.size(); k++) {
+                        Condition fragmentCondition = Condition.fromJson(fragmentConditions[j]);
+                        if(conditions.get(k).leftValue.attrName.equals(fragmentCondition.leftValue.attrName)) {
+                            if(conditions.get(k).isConflict(fragmentCondition)) {
+                                isConflict = true;
+                                break;
+                            }
+                        }
+                    }
+                    if(isConflict) {
+                        break;
+                    }
+                }
+                if(!isConflict) {
+                    String site = etcdClient.get(fConstant.getSite());
+                    SqlClient sqlClient = new SqlClient(site);
+                    sqlClient.executeNonQuery(input);
+                    sqlClient.close();
+                    break;
+                }
+            }
+            
+        } else {
+            //垂直分片
+            Map<String, Integer> map = new HashMap<>();
+            for(int i = 0; i < attributes.length; i++) {
+                map.put(attributes[i], i);
+            }
+            ExpressionList columns = (ExpressionList)insertStatement.getItemsList();
+            for(int i = 0; i < fragmentList.size(); i++) {
+                FragmentConstant fConstant = new FragmentConstant(fragmentList.get(i));
+                String[] fragmentAttrs = etcdClient.get(fConstant.getAttributes()).split(",");
+                String sql = "insert into " + tableName + " (";
+                for(int j = 0; j < fragmentAttrs.length - 1; j++) {
+                    sql += fragmentAttrs[j] + ",";
+                }
+                sql += fragmentAttrs[fragmentAttrs.length - 1] + ") values(";
+                for(int j = 0; j < fragmentAttrs.length - 1; j++) {
+                    sql += columns.getExpressions().get(map.get(fragmentAttrs[j])).toString() + ",";
+                }
+                sql += columns.getExpressions().get(map.get(fragmentAttrs[fragmentAttrs.length - 1])).toString() + ")";
+                String site = etcdClient.get(fConstant.getSite());
+                SqlClient sqlClient = new SqlClient(site);
+                sqlClient.executeNonQuery(sql);
+                sqlClient.close();
+            }
+        }
+    }
+
+    private void loadTSV(String str) throws Exception {
+        String fileName = str.split(" INTO ")[0];
+        String tableName = str.split(" INTO ")[1];
+        File file = new File(fileName);
+        InputStreamReader inputReader = new InputStreamReader(new FileInputStream(file),"UTF-8");
+        BufferedReader bf = new BufferedReader(inputReader);
+        // 按行读取字符串
+        String input;
+        String[] sites = etcdClient.get("sites").split(",");
+        String fragments = "";
+        FragmentConstant Constant = new FragmentConstant("");
+        fragments += etcdClient.get(Constant.getFragments());
+        List<String> fragmentList = new ArrayList<>();
+        String[] fragmentSplits = fragments.split(",");
+        for(int i = 0; i < fragmentSplits.length; i++) {
+            if(fragmentSplits[i].contains(tableName)) {
+                fragmentList.add(fragmentSplits[i]);
+            }
+        }
+        Map<String,StringBuffer> siteMap = new HashMap<>();
+        FragmentConstant fragmentConstant = new FragmentConstant(fragmentList.get(0));
+        RelationConstant relationConstant = new RelationConstant(tableName);
+        String isHorizon = etcdClient.get(fragmentConstant.getIsHorizontal());
+        String etcdAttribute = etcdClient.get(relationConstant.getAttributes());
+        if(etcdAttribute.charAt(0) == ',') {
+            etcdAttribute = etcdAttribute.substring(1);
+        }
+        String[] attributes = etcdAttribute.split(",");
+        Map<String, Integer> map = new HashMap<>();
+        String[] fragmentAttrs = {};
+        if(isHorizon.contains("1")) {
+            for(int i = 0; i < sites.length; i++) {
+                siteMap.put(sites[i], new StringBuffer("insert into " + tableName + " values"));
+            }
+        } else {
+            for(int i = 0; i < sites.length; i++) {
+                siteMap.put(sites[i], new StringBuffer("insert into " + tableName));
+            }
+            //垂直分片
+            for(int i = 0; i < attributes.length; i++) {
+                map.put(attributes[i], i);
+            }
+            for(int i = 0; i < fragmentList.size(); i++) {
+                FragmentConstant fConstant = new FragmentConstant(fragmentList.get(i));
+                fragmentAttrs = etcdClient.get(fConstant.getAttributes()).split(",");
+                String site = etcdClient.get(fConstant.getSite());
+                String sql = " (";
+                for(int j = 0; j < fragmentAttrs.length - 1; j++) {
+                    sql += fragmentAttrs[j] + ",";
+                }
+                sql += fragmentAttrs[fragmentAttrs.length - 1] + ") values";
+                siteMap.get(site).append(sql);
+            }
+        }
+        while ((input = bf.readLine()) != null) {        
+            Insert insertStatement = (Insert) CCJSqlParserUtil.parse(input);
+            //水平分片
+            if(isHorizon.contains("1")) {
+                List<Condition> conditions = new ArrayList<>();
+                ExpressionList columns = (ExpressionList)insertStatement.getItemsList();
+                for(int i = 0; i < attributes.length; i++) {
+                    String s = attributes[i] + "=" + columns.getExpressions().get(i).toString();
+                    Condition condition = parseCondition(s, tableName, false);
+                    conditions.add(condition);
+                }
+                for(int i = 0; i < fragmentList.size(); i++) {
+                    FragmentConstant fConstant = new FragmentConstant(fragmentList.get(i));
+                    String[] fragmentConditions = etcdClient.get(fConstant.getConditions()).split("%");
+                    Boolean isConflict = false;
+                    for(int j = 0; j < fragmentConditions.length; j++) {
+                        for(int k = 0; k < conditions.size(); k++) {
+                            Condition fragmentCondition = Condition.fromJson(fragmentConditions[j]);
+                            if(conditions.get(k).leftValue.attrName.equals(fragmentCondition.leftValue.attrName)) {
+                                if(conditions.get(k).isConflict(fragmentCondition)) {
+                                    isConflict = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if(isConflict) {
+                            break;
+                        }
+                    }
+                    if(!isConflict) {
+                        String value = input.substring(input.indexOf("("));
+                        String site = etcdClient.get(fConstant.getSite());
+                        siteMap.get(site).append(value + ",");
+                        break;
+                    }
+                }
+                
+            } else {
+                ExpressionList columns = (ExpressionList)insertStatement.getItemsList();
+                for(int i = 0; i < fragmentList.size(); i++) {
+                    FragmentConstant fConstant = new FragmentConstant(fragmentList.get(i));
+                    String sql = "(";
+                    for(int j = 0; j < fragmentAttrs.length - 1; j++) {
+                        sql += columns.getExpressions().get(map.get(fragmentAttrs[j])).toString() + ",";
+                    }
+                    sql += columns.getExpressions().get(map.get(fragmentAttrs[fragmentAttrs.length - 1])).toString() + "),";
+                    String site = etcdClient.get(fConstant.getSite());
+                    siteMap.get(site).append(sql);
+                    
+                }
+            }
+        }
+        for(Entry<String,StringBuffer> entry: siteMap.entrySet()) {
+            String site = entry.getKey();
+            SqlClient sqlClient = new SqlClient(site);
+            String sql = entry.getValue().toString();
+            sql = sql.substring(0,sql.length() - 1);
+            if(sql.contains("(")) {
+                sqlClient.executeNonQuery(sql);
+            }
+            sqlClient.close();
+        }
+        bf.close();
+        inputReader.close();
+    }
     //插入所有节点查询时优化
     private void executeSql(String sql) throws Exception {
         SiteConstant siteConstant = new SiteConstant("");
         String sites = etcdClient.get(siteConstant.getSites());
         String[] siteList = sites.split(",");
-        for (String site : siteList) {
-            site = site.trim();
+        Map<String, String> map = new HashMap<>();
+        Set<String> hashSet = new HashSet<>(); 
+        for(int i = 0; i < siteList.length; i++) {
+            hashSet.add(siteList[i].split(":")[0]);
+            map.put(siteList[i].split(":")[0], siteList[i].trim());
+        }
+        for (Entry<String,String> entry: map.entrySet()) {
+            String site = entry.getValue();
             SqlClient sqlClient = new SqlClient(site);
             sqlClient.executeNonQuery(sql);
+            sqlClient.close();
         }
     }
 
     private void allocateFragment(String input) throws Exception {
-        String[] strs = input.split("to");
+        String[] strs = input.split(" to ");
         String fragmentId = strs[0].split(" ")[1].trim();
         String siteName = strs[1].trim();
         FragmentConstant fragmentConstant = new FragmentConstant(fragmentId);
@@ -343,7 +626,7 @@ public class Parser {
     }
 
     //现在做的都是多表查询而且表名.属性，TO-DO单表的查询
-    private void parseSelectSql(String sql) throws Exception {
+    private List<String> parseSelectSql(String sql) throws Exception {
         Select selectStatement = (Select) CCJSqlParserUtil.parse(sql);
         TablesNamesFinder tablesNamesFinder = new TablesNamesFinder();
         //单表情况下
@@ -456,6 +739,10 @@ public class Parser {
             tempTable.content.project = "";
             tempTable.content.condition = "";
             tempTable.site = etcdClient.get(fragmentConstant.getSite());
+            //TO-DO改ip
+            if(tempTable.site.equals("")) {
+                tempTable.site = "192.168.31.101" +":31100"; 
+            }
             tableName = fragmentId.split("-")[0];
             //水平分片,默认拥有所有的属性,TO-DO 混合分片
             if (etcdClient.get(fragmentConstant.getIsHorizontal()).equals("1")) {
@@ -478,6 +765,11 @@ public class Parser {
                 }
                 for (Condition condition : conditions) {
                     boolean isUsed = false;
+                    if(condition.leftValue.attrName.contains(tableName + ".") && !condition.isJoin) {
+                        isUsed = true;
+                    } else {
+                        continue;
+                    }
                     for (Condition fragmentCondition : fragmentConditions) {
                         if (!condition.isJoin && !fragmentCondition.isJoin) {
                             if (condition.leftValue.attrName.equals(fragmentCondition.leftValue.attrName)) {
@@ -561,7 +853,22 @@ public class Parser {
                 }
                 tableName = fragmentId.split("-")[0].trim();
 
-                if (verticalMaps.get(tableName) == null || verticalMaps.get(tableName).size() == 0) {
+                //如果垂直分片中有condition的列就把condition加进去
+                for(Condition condition: conditions) {
+                    if(!condition.isJoin && condition.leftValue.attrName.split("[.]")[0].equals(tableName)) {
+                        String attrName =  condition.leftValue.attrName.split("[.]")[1];
+                        for(int i = 0; i < attributes.length; i++) {
+                            if(attributes[i].equals(attrName)) {
+                                tempTable.content.condition += condition.toJson() + "%";
+                                break;
+                            }
+                        }
+                    }
+                }
+                if(tempTable.content.condition.length() > 0) {
+                    tempTable.content.condition = tempTable.content.condition.substring(0, tempTable.content.condition.length() - 1);
+                }
+                 if (verticalMaps.get(tableName) == null || verticalMaps.get(tableName).size() == 0) {
                     List<TreeNode> nodes = new ArrayList<>();
                     nodes.add(tempTable);
                     verticalMaps.put(tableName, nodes);
@@ -640,15 +947,22 @@ public class Parser {
                         String[] leftConditiosString = leftRoot.children.get(i).content.condition.split("%");
                         String[] rightConditionsString = rightRoot.children.get(j).content.condition.split("%");
                         boolean isConflict = false;
+                        if(leftConditiosString.length == 1 && leftConditiosString[0].length() <3) {}
                         for(int ii = 0; ii < leftConditiosString.length; ii++) {
                             if(isConflict) {
                                 break;
                             }
                             Condition leftCondition = Condition.fromJson(leftConditiosString[ii]);
+                            if(leftCondition!= null && leftCondition.isJoin) {
+                                continue;
+                            }
                             if(leftCondition != null && leftCondition.leftValue.attrName.equals(condition.leftValue.attrName)) {
                                 leftCondition.leftValue.attrName = condition.rightValue.attrName;
                                 for(int jj = 0; jj < rightConditionsString.length; jj++) {
                                     Condition rightCondition = Condition.fromJson(rightConditionsString[jj]);
+                                    if(rightCondition != null && rightCondition.isJoin) {
+                                        continue;
+                                    }
                                     if(rightCondition != null && leftCondition.leftValue.attrName.equals(rightCondition.leftValue.attrName) && leftCondition.isConflict(rightCondition)) {
                                         conflictPairs.add(new Pair<TreeNode,TreeNode>(leftRoot.children.get(i), rightRoot.children.get(j)));
                                         isConflict = true;
@@ -667,10 +981,16 @@ public class Parser {
                                 break;
                             }
                             Condition rightCondition = Condition.fromJson(rightConditionsString[ii]);
+                            if(rightCondition != null && rightCondition.isJoin) {
+                                continue;
+                            }
                             if(rightCondition != null && rightCondition.leftValue.attrName.equals(condition.rightValue.attrName)) {
                                 rightCondition.leftValue.attrName = condition.leftValue.attrName;
                                 for(int jj = 0; jj < leftConditiosString.length; jj++) {
                                     Condition leftCondition = Condition.fromJson(leftConditiosString[jj]);
+                                    if(leftCondition != null && leftCondition.isJoin) {
+                                        continue;
+                                    }
                                     if(leftCondition != null && leftCondition.leftValue.attrName.equals(rightCondition.leftValue.attrName) && rightCondition.isConflict(leftCondition)) {
                                         conflictPairs.add(new Pair<TreeNode,TreeNode>(leftRoot.children.get(i), rightRoot.children.get(j)));
                                         isConflict = true;
@@ -819,7 +1139,7 @@ public class Parser {
         //把垂直分片的叶子节点放到同一个节点上，，先join成一张表
 
         siteMap.put(siteList.get(0), nmap);
-        Map<String,Map<String,TreeNode>> secondMap = new HashMap<>();
+        Map<String,Map<String,TreeNode>> secondMap = new HashMap<String,Map<String,TreeNode>>();
         //开始合并子节点
         for(int i = 0; i < siteList.size(); i++) {
             Map<String, TreeNode> tmpMap = new HashMap<>();
@@ -850,6 +1170,13 @@ public class Parser {
         List<TreeNode> siteFinalList = new ArrayList<>();
         for(int i = 0; i < siteList.size(); i++) {
             TreeNode finalNode = new TreeNode();
+            for(Entry<String,Map<String,TreeNode>> entry : secondMap.entrySet()) {
+                for(Entry<String, TreeNode> entry2 : entry.getValue().entrySet()) {
+                    finalNode = entry2.getValue();
+                    break;
+                }
+                break;
+            }
             for (Condition condition : conditions) {
                 if (condition.isJoin) {
                     TreeNode leftNode = secondMap.get(siteList.get(i)).get(condition.leftValue.attrName.split("[.]")[0]);
@@ -881,9 +1208,46 @@ public class Parser {
             finalRoot = Union(siteFinalList);
         }
         reviseLeafNode(finalRoot);
+        String[] selectAttrs = finalRoot.content.project.split(",");
+        List<String> selectFinal = new ArrayList<>();
+        for(int i = 0; i < selectAttributes.size(); i++) {
+            selectFinal.add(selectAttributes.get(i).getRelationName() + "." + selectAttributes.get(i).getAttributeName());
+        }
+        finalRoot.content.project = "";
+        for(int i = 0; i < selectAttrs.length; i++) {
+            for(int j = 0; j < selectFinal.size(); j++) {
+                if(selectAttrs[i].contains(selectFinal.get(j))) {
+                    finalRoot.content.project += selectAttrs[i] + ",";
+                }
+            }
+        }
+        finalRoot.content.project = finalRoot.content.project.substring(0, finalRoot.content.project.length() - 1);
+        // TreeNode.calculateNode(finalRoot);
+        // TreeNode.Print(finalRoot);
+        mappingtool.layer m = TreeNode.dfs(finalRoot);
+        System.out.println("" + m.toString());
         storeInEtcd(finalRoot);
-        //对于所有的叶子节点，加上as语句生成相应的表
-
+        List<String> l = null;
+        if(finalRoot.children.size() == 0) {
+            SqlClient client2 = new SqlClient(finalRoot.site);
+            l = client2.executeQuery(sql);
+            client2.close();
+        }else {
+            SqlClient client2 = new SqlClient(SqlServer.site);
+            // System.out.println(client2.requestTable(node.fragmentId));
+            l = client2.requestTable(finalRoot.fragmentId);
+            client2.close();
+        }
+            System.out.println("=================");
+            System.out.println("length = " + l.size());
+            for (int i = 0; i < l.size() && i< 5; i++) {
+                System.out.println(l.get(i));
+            }
+            if (l.size() == 0) {
+                System.out.println("empty");
+            }
+            
+        return l;
 
        //把所有的表按照join条件组合在一起
     //    TreeNode realNode = new TreeNode();
@@ -943,8 +1307,44 @@ public class Parser {
         return node;
     }
     private int getTreeNodeSize(TreeNode node) {
-        return 1;
+        if(node.content.isLeaf) {
+            String sql = "select count(*) from " + node.content.tableName;
+            String[] conditionStrings = node.content.condition.split("%");
+            if(conditionStrings.length == 1 && conditionStrings[0].length() <3) {
+
+            } else {
+                sql += " where ";
+                for(int i = 0; i < conditionStrings.length - 1; i++) {
+                    Condition condition = Condition.fromJson(conditionStrings[i]);
+                    sql += condition.leftValue.attrName + condition.Op() + condition.rightValue.value;
+                    sql += " and ";
+                }
+                Condition condition = Condition.fromJson(conditionStrings[conditionStrings.length - 1]);
+                sql += condition.leftValue.attrName + condition.Op() + condition.rightValue.value;
+            }
+            SqlClient client = new SqlClient(node.site);
+            List<String> strList = client.executeQuery(sql);
+            node.predictNum = Integer.parseInt(strList.get(1).substring(1, strList.get(1).length() - 1));
+            client.close();
+            return node.predictNum; 
+        } else if(node.content.isUnion) {
+            if(node.predictNum == 0) {
+                for(int i = 0; i < node.children.size(); i++) {
+                    node.predictNum += node.children.get(i).childNum;
+                }
+            }
+            return node.predictNum;
+        } else {
+            if(node.predictNum == 0) {
+                node.predictNum = 1;
+                for(int i = 0; i < node.children.size(); i++) {
+                    node.predictNum *= node.children.get(i).childNum;
+                }
+            }
+            return node.predictNum; 
+        }
     }
+    
     private void parseTreeToEtcd(TreeNode root) {
         if(root.content.isLeaf) {
             return;
@@ -1161,14 +1561,36 @@ public class Parser {
     }
 
     private void reviseLeafNode(TreeNode root) {
+        if(root.content.project.charAt(root.content.project.length() - 1) == ',') {
+            root.content.project = root.content.project.substring(0, root.content.project.length() - 1);
+        }
         if(root.content.isLeaf) {
             String res = "";
             String[] strs = root.content.project.split(",");
             for(int i = 0; i < strs.length - 1; i++) {
                 res += strs[i] + " as " + "`" +strs[i] + "`" + ",";
             }
-            res += strs[strs.length - 1] + "as" + "`" +strs[strs.length - 1] + "`";
+            res += strs[strs.length - 1] + " as " + "`" +strs[strs.length - 1] + "`";
             root.content.project = res;
+
+            String[] conditioStrings = root.content.condition.split("%");
+            res = "";
+            for(int i = 0; i < conditioStrings.length - 1; i++) {
+                if(conditioStrings[i].length() > 0) {
+                    Condition condition = Condition.fromJson(conditioStrings[i]);
+                    res += condition.leftValue.attrName.split("[.]")[1];
+                    res += condition.StringByOpType(condition.op);
+                    res += condition.rightValue.value;
+                    res +=" and ";
+                }
+            }
+            if(conditioStrings[conditioStrings.length - 1].length() > 0) {
+                Condition condition = Condition.fromJson(conditioStrings[conditioStrings.length - 1]);
+                res += condition.leftValue.attrName.split("[.]")[1];
+                res += condition.StringByOpType(condition.op);
+                res += condition.rightValue.value;
+            }
+            root.content.condition = res;
             return ;
         } else {
             for(int i = 0; i < root.children.size(); i++) {

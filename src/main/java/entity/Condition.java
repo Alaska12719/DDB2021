@@ -2,6 +2,8 @@ package entity;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
+
+import net.sf.jsqlparser.expression.operators.relational.GreaterThan;
 import network.TempTable;
 
 /**
@@ -47,6 +49,33 @@ public class Condition {
 
     public String toJson() {
         return JSON.toJSONString(this);
+    }
+    public String StringByOpType(opType type) {
+        switch (type) {
+            case GREATER_THAN: return ">";
+            case EQUAL_TO: return "=";
+            case MIN_THAN: return "<";
+            case GREATER_EQUAL_TO: return ">=";
+            case MIN_EQUAL_TO: return "<=";
+            case NOT_EQUAL: return "<>";
+            case EQUAL_TO_STRING: return "=";
+            case NOT_EQUAL_TOSTRING: return "<>";
+            default:return "";
+        }
+    }
+
+    public String Op() {
+        switch(op) {
+            case GREATER_THAN: return ">";
+            case EQUAL_TO_STRING: return "=";
+            case EQUAL_TO: return "=";
+            case MIN_THAN: return "<";
+            case GREATER_EQUAL_TO: return ">=";
+            case MIN_EQUAL_TO: return "<=";
+            case NOT_EQUAL: return "<>";
+            case NOT_EQUAL_TOSTRING: return "<>";
+        }
+        return "";
     }
 
     //传进来的必须是两个属性名相同的condition，比较两个Condition是否冲突，true表示冲突，前提是condition1和condition2都是,TO-DO默认左边是属性，右边是值

@@ -11,7 +11,9 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -39,6 +41,7 @@ import network.proto.DdbServiceGrpc.DdbServiceImplBase;
 public class SqlServer {
     private Server server;
 
+    public static String site = "";
     private boolean isPortUsing(int port) throws UnknownHostException {
         boolean flag = false;
         InetAddress localAddress = InetAddress.getLocalHost();
@@ -90,7 +93,7 @@ public class SqlServer {
                     siteBuffer.append(ip)
                               .append(":")
                               .append(port);
-                    String site = siteBuffer.toString();
+                    site = siteBuffer.toString();
                     if (false == sites.contains(site)) {
                         if (false == sites.isEmpty()) {
                             sites = sites + ",";
@@ -142,9 +145,12 @@ class DdbServiceImpl extends DdbServiceImplBase {
         TableResponse tableResponse = null;
         try {
             tableResponse = response.get();
-
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (CancellationException ce) {
+            System.out.println("the computation was cancelled");
+        } catch (ExecutionException ee) {
+            System.out.println("the computation threw an exception");
+        } catch (InterruptedException ie) {
+            System.out.println("the current thread was interrupted while waiting");
         }
         List<String> queryResult = new ArrayList<>();
         queryResult.add(tableResponse.getAttributeMeta());
@@ -245,9 +251,6 @@ class DdbServiceImpl extends DdbServiceImplBase {
 								// }
         // 从获取ETCD中获取要执行的结点并删除
         final String tempTableName = tableRequest.getTempTableName();
-        // Date dNow = new Date( );
-        // SimpleDateFormat ft = new SimpleDateFormat ("yyyy-MM-dd hh:mm:ss");
-        // System.out.println("当前时间为: " + ft.format(dNow) + " " + tempTableName);
         TempTable tempTable = null;
         try (EtcdClient etcdClient = new EtcdClient(Constants.ETCD_ENDPOINTS)) {
             String json = etcdClient.get(tempTableName);
@@ -277,6 +280,7 @@ class DdbServiceImpl extends DdbServiceImplBase {
 
                 // 从子结点获取数据并保存到同一张表中
                 List<ListenableFuture<TableResponse>> responses = new ArrayList<>();
+                final long start = System.currentTimeMillis();
                 for (int i = 0; i < n; i++) {
                     responses.add(getDataFromChild(addresses.get(i), children.get(i)));
                 }
@@ -287,10 +291,29 @@ class DdbServiceImpl extends DdbServiceImplBase {
                 final CountDownLatch countDownLatch = new CountDownLatch(n);
                 for (int i = 0; i < n; i++) {
                     final int p = i;
-                    new Thread(new Runnable(){
+                    new Thread(new Runnable() {
                         @Override
                         public void run() {
                             List<String> queryResult = waitForData(responses.get(p));
+                            long size = 0;
+                            for (String data : queryResult) {
+                                size += data.length();
+                            }
+                            try (EtcdClient client = new EtcdClient(Constants.ETCD_ENDPOINTS)) {
+                                long finish = System.currentTimeMillis();
+                                String accumulateSize = client.get(addresses.get(p) + "_SIZE");
+                                if (accumulateSize.isEmpty()) {
+                                    accumulateSize = "0";
+                                }
+                                String accumulateTime = client.get(addresses.get(p) + "_TIME");
+                                if (accumulateTime.isEmpty()) {
+                                    accumulateTime = "0";
+                                }
+                                client.put(addresses.get(p) + "_SIZE", Long.toString(Long.parseLong(accumulateSize) + size));
+                                client.put(addresses.get(p) + "_TIME", Long.toString(Long.parseLong(accumulateTime) + finish - start));
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            }
                             String sql = String.format("create table if not exists `%s` (%s) ENGINE=InnoDB DEFAULT CHARSET=utf8",
                                                        tempTableName, queryResult.get(0));
                             MySQL.executeNonQuery(sql, null);
@@ -322,6 +345,7 @@ class DdbServiceImpl extends DdbServiceImplBase {
 
                 // 从子结点获取数据并保存到不同的表中
                 List<ListenableFuture<TableResponse>> responses = new ArrayList<>();
+                final long start = System.currentTimeMillis();
                 for (int i = 0; i < n; i++) {
                     responses.add(getDataFromChild(addresses.get(i), children.get(i)));
                 }
@@ -334,6 +358,25 @@ class DdbServiceImpl extends DdbServiceImplBase {
                             List<String> queryResult = waitForData(responses.get(p));
                             if (queryResult.size() == 0) {
                                 return;
+                            }
+                            long size = 0;
+                            for (String data : queryResult) {
+                                size += data.length();
+                            }
+                            try (EtcdClient client = new EtcdClient(Constants.ETCD_ENDPOINTS)) {
+                                long finish = System.currentTimeMillis();
+                                String accumulateSize = client.get(addresses.get(p) + "_SIZE");
+                                if (accumulateSize.isEmpty()) {
+                                    accumulateSize = "0";
+                                }
+                                String accumulateTime = client.get(addresses.get(p) + "_TIME");
+                                if (accumulateTime.isEmpty()) {
+                                    accumulateTime = "0";
+                                }
+                                client.put(addresses.get(p) + "_SIZE", Long.toString(Long.parseLong(accumulateSize) + size));
+                                client.put(addresses.get(p) + "_TIME", Long.toString(Long.parseLong(accumulateTime) + finish - start));
+                            } catch (Exception e) {
+                                e.printStackTrace();
                             }
                             String sql = String.format("drop table if exists `%s`;", children.get(p));
                             MySQL.executeNonQuery(sql, null);

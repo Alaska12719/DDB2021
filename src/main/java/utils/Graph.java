@@ -52,6 +52,11 @@ public class Graph{
 
     public List<TreeNode> visit(TreeNode rootContent) {
         Node root = graphMap.get(rootContent.fragmentId);
+        List<TreeNode> res = new ArrayList<>();
+        if(root == null) {
+            res.add(rootContent);
+            return res;
+        }
         Set<Node> nodes = new HashSet<>();
         Set<Node> nodeList = new HashSet<>();
         nodes.add(root);
@@ -59,7 +64,7 @@ public class Graph{
         Set<String> tableSet = new HashSet<>();
         tableSet.add(root.content.fragmentId.split("-")[0]);
         bfs(root, nodes, nodeList, tableSet);
-        List<TreeNode> res = new ArrayList<>();
+        
         for(Node n : nodeList) {
             res.add(n.content);
         }
