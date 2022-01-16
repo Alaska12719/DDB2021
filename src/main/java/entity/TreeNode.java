@@ -26,42 +26,6 @@ public class TreeNode {
         }
         return m;
     }
-    // public static void Print(TreeNode root) {
-    //     //计算每一层元素个数
-    //     Queue<TreeNode> queue1 = new LinkedList<>();
-    //     Queue<TreeNode> queue2 = new LinkedList<>();
-    //     queue1.offer(root);
-    //     while(!queue1.isEmpty()) {
-    //         int pos = 0;
-    //         while(!queue1.isEmpty()) {
-    //             TreeNode node = queue1.remove();
-    //             pos = node.nodePos + node.nodeSize / 2 - pos;
-    //             for(int i = 0; i < pos; i++) {
-    //                 System.out.print("                            ");
-    //             }
-    //             System.out.print(node.content.tableName + node.site);
-    //             for(int i = 0; i < node.children.size(); i++) {
-    //                 queue2.offer(node.children.get(i));
-    //             }
-    //         }
-    //         System.out.println();
-    //         queue1.addAll(queue2);
-    //         queue2.clear();
-    //     }
-    // }
-    
-    // public static int calculateNode(TreeNode root) {
-    //     if(root.children.size() == 0) {
-    //         return 1;
-    //     }
-    //     int sum = 0;
-    //     for(int i = 0; i < root.children.size(); i++) {
-    //         root.children.get(i).nodePos = sum;
-    //         root.nodeSize += calculateNode(root.children.get(i)); 
-    //         sum = root.nodeSize;
-    //     }
-    //     return root.nodeSize;
-    // }
     public boolean isUsed = true;
     public TempTable content = new TempTable();
     public String fragmentId = "";
